@@ -2,6 +2,7 @@
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 local Player = Players.LocalPlayer
 
 local finalPos1 = Vector3.new(-483.59, -5.04, 104.24)
@@ -10,45 +11,117 @@ local checkpointA = Vector3.new(-472.60, -7.00, 57.52)
 local checkpointB1 = Vector3.new(-472.65, -7.00, 95.69)
 local checkpointB2 = Vector3.new(-471.76, -7.00, 26.22)
 
+-- Main GUI
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "Primoo_Tp_Ragdoll"
 screenGui.ResetOnSpawn = false
 screenGui.Parent = Player:WaitForChild("PlayerGui")
 
+-- Background with dark blue
+local background = Instance.new("Frame")
+background.Size = UDim2.new(1, 0, 1, 0)
+background.BackgroundColor3 = Color3.fromRGB(10, 20, 40) -- Dark blue
+background.BackgroundTransparency = 0.3
+background.Parent = screenGui
+
+-- Particles
+local particles = {}
+for i = 1, 20 do
+	local particle = Instance.new("Frame")
+	particle.Size = UDim2.new(0, math.random(2, 5), 0, math.random(2, 5))
+	particle.Position = UDim2.new(math.random(), 0, math.random(), 0)
+	particle.BackgroundColor3 = Color3.fromRGB(100, 150, 255) -- Light blue
+	particle.BackgroundTransparency = 0.3
+	particle.BorderSize = 0
+	particle.Parent = background
+	
+	-- Store particle data
+	table.insert(particles, {
+		frame = particle,
+		speed = math.random(10, 50) / 100,
+		direction = Vector2.new(math.random(-100, 100)/1000, math.random(-100, 100)/1000)
+	})
+end
+
+-- Particle animation
+RunService.Heartbeat:Connect(function(dt)
+	for _, p in ipairs(particles) do
+		local pos = p.frame.Position
+		local newX = pos.X.Scale + p.direction.X * dt * 2
+		local newY = pos.Y.Scale + p.direction.Y * dt * 2
+		
+		-- Wrap around screen
+		if newX > 1 then newX = 0 end
+		if newX < 0 then newX = 1 end
+		if newY > 1 then newY = 0 end
+		if newY < 0 then newY = 1 end
+		
+		p.frame.Position = UDim2.new(newX, 0, newY, 0)
+	end
+end)
+
+-- Main Frame (White)
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 220, 0, 90)
-mainFrame.Position = UDim2.new(0.5, -110, 0.5, -45)
-mainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+mainFrame.Size = UDim2.new(0, 260, 0, 120) -- Medyo pinalaki para magkapatong
+mainFrame.Position = UDim2.new(0.5, -130, 0.5, -60)
+mainFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255) -- White
+mainFrame.BackgroundTransparency = 0.1
 mainFrame.Active = true
 mainFrame.Parent = screenGui
 
-Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 8)
-Instance.new("UIStroke", mainFrame).Color = Color3.new(1, 1, 1)
+-- Rounded corners
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 12)
+corner.Parent = mainFrame
 
+-- Stroke/Outline
+local stroke = Instance.new("UIStroke")
+stroke.Color = Color3.fromRGB(200, 220, 255)
+stroke.Thickness = 2
+stroke.Parent = mainFrame
+
+-- Title
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, 0, 0, 30)
-title.Text = "Primoo Tp Ragdoll"
+title.Size = UDim2.new(1, 0, 0, 35)
+title.Position = UDim2.new(0, 0, 0, 5)
+title.Text = "Primoo TP Ragdoll"
 title.Font = Enum.Font.GothamBold
-title.TextColor3 = Color3.new(1, 1, 1)
+title.TextSize = 18
+title.TextColor3 = Color3.fromRGB(10, 20, 40) -- Dark blue
 title.BackgroundTransparency = 1
 title.Parent = mainFrame
 
-local function createBtn(text, pos)
+-- Create button function with design
+local function createBtn(text, pos, color)
 	local btn = Instance.new("TextButton")
-	btn.Size = UDim2.new(0.42, 0, 0, 35)
+	btn.Size = UDim2.new(0.4, 0, 0, 40)
 	btn.Position = pos
 	btn.Text = text
 	btn.Font = Enum.Font.GothamBold
-	btn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-	btn.TextColor3 = Color3.new(1, 1, 1)
+	btn.TextSize = 16
+	btn.BackgroundColor3 = color or Color3.fromRGB(10, 20, 40) -- Dark blue
+	btn.TextColor3 = Color3.fromRGB(255, 255, 255) -- White
 	btn.Parent = mainFrame
-	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+	
+	-- Rounded corners
+	local btnCorner = Instance.new("UICorner")
+	btnCorner.CornerRadius = UDim.new(0, 8)
+	btnCorner.Parent = btn
+	
+	-- Stroke
+	local btnStroke = Instance.new("UIStroke")
+	btnStroke.Color = Color3.fromRGB(200, 220, 255)
+	btnStroke.Thickness = 1.5
+	btnStroke.Parent = btn
+	
 	return btn
 end
 
-local tpButton1 = createBtn("TP 1", UDim2.new(0.05, 0, 0.45, 0))
-local tpButton2 = createBtn("TP 2", UDim2.new(0.53, 0, 0.45, 0))
+-- Create buttons (magkapatong na position)
+local tpButton1 = createBtn("TP 1", UDim2.new(0.07, 0, 0.55, 0), Color3.fromRGB(15, 30, 55))
+local tpButton2 = createBtn("TP 2", UDim2.new(0.53, 0, 0.55, 0), Color3.fromRGB(15, 30, 55))
 
+-- Drag functionality
 local dragging, dragStart, startPos
 
 mainFrame.InputBegan:Connect(function(input)
@@ -62,7 +135,12 @@ end)
 UserInputService.InputChanged:Connect(function(input)
 	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
 		local delta = input.Position - dragStart
-		mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+		mainFrame.Position = UDim2.new(
+			startPos.X.Scale, 
+			startPos.X.Offset + delta.X, 
+			startPos.Y.Scale, 
+			startPos.Y.Offset + delta.Y
+		)
 	end
 end)
 
@@ -70,6 +148,7 @@ UserInputService.InputEnded:Connect(function(input)
 	dragging = false
 end)
 
+-- TP Function
 local function move(pos)
 	local char = Player.Character
 	if char then
@@ -81,6 +160,7 @@ local function move(pos)
 	end
 end
 
+-- Button clicks
 tpButton1.MouseButton1Click:Connect(function()
 	move(checkpointA)
 	task.wait(0.1)
@@ -96,3 +176,21 @@ tpButton2.MouseButton1Click:Connect(function()
 	task.wait(0.1)
 	move(finalPos2)
 end)
+
+-- Glow effect sa buttons (optional)
+local function addGlow(btn)
+	local glow = Instance.new("Frame")
+	glow.Size = UDim2.new(1, 10, 1, 10)
+	glow.Position = UDim2.new(0, -5, 0, -5)
+	glow.BackgroundColor3 = Color3.fromRGB(100, 150, 255)
+	glow.BackgroundTransparency = 0.8
+	glow.ZIndex = -1
+	glow.Parent = btn
+	
+	local glowCorner = Instance.new("UICorner")
+	glowCorner.CornerRadius = UDim.new(0, 10)
+	glowCorner.Parent = glow
+end
+
+addGlow(tpButton1)
+addGlow(tpButton2)
