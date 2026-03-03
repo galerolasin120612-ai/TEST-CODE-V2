@@ -50,6 +50,312 @@ UserInputService.JumpRequest:Connect(function()
 end)
 
 -- ============================================================
+-- ORIGINAL AUTO GRAB SCRIPT (NO GUI)
+-- ============================================================
+local AUTO_STEAL_NEAREST = false
+local AutoGrabRadius = 20
+
+-- Services for auto grab
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+-- Load AnimalsData if available
+local AnimalsData = nil
+pcall(function()
+    AnimalsData = require(ReplicatedStorage:WaitForChild("Datas"):WaitForChild("Animals"))
+end)
+
+-- Auto grab variables
+local allAnimalsCache = {}
+local PromptMemoryCache = {}
+local InternalStealCache = {}
+local LastTargetUID = nil
+local LastPlayerPosition = nil
+local PlayerVelocity = Vector3.zero
+local IsStealing = false
+local StealProgress = 0
+local CurrentStealTarget = nil
+local StealStartTime = 0
+
+-- Helper functions
+local function getHRP()
+    local char = LocalPlayer.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso")
+end
+
+local function isMyBase(plotName)
+    local plot = workspace.Plots:FindFirstChild(plotName)
+    if not plot then return false end
+    local sign = plot:FindFirstChild("PlotSign")
+    if sign then
+        local yourBase = sign:FindFirstChild("YourBase")
+        if yourBase and yourBase:IsA("BillboardGui") then
+            return yourBase.Enabled == true
+        end
+    end
+    return false
+end
+
+local function scanSinglePlot(plot)
+    if not plot or not plot:IsA("Model") then return end
+    if isMyBase(plot.Name) then return end
+    
+    local podiums = plot:FindFirstChild("AnimalPodiums")
+    if not podiums then return end
+    
+    for _, podium in ipairs(podiums:GetChildren()) do
+        if podium:IsA("Model") and podium:FindFirstChild("Base") then
+            local animalName = "Unknown"
+            local spawn = podium.Base:FindFirstChild("Spawn")
+            if spawn then
+                for _, child in ipairs(spawn:GetChildren()) do
+                    if child:IsA("Model") and child.Name ~= "PromptAttachment" then
+                        animalName = child.Name
+                        if AnimalsData and AnimalsData[animalName] and AnimalsData[animalName].DisplayName then
+                            animalName = AnimalsData[animalName].DisplayName
+                        end
+                        break
+                    end
+                end
+            end
+            table.insert(allAnimalsCache, {
+                name = animalName,
+                plot = plot.Name,
+                slot = podium.Name,
+                worldPosition = podium:GetPivot().Position,
+                uid = plot.Name .. "_" .. podium.Name,
+            })
+        end
+    end
+end
+
+local function initializeScanner()
+    task.wait(2)
+    local plots = workspace:WaitForChild("Plots", 10)
+    if not plots then return end
+    
+    for _, plot in ipairs(plots:GetChildren()) do
+        if plot:IsA("Model") then
+            scanSinglePlot(plot)
+        end
+    end
+    
+    plots.ChildAdded:Connect(function(plot)
+        if plot:IsA("Model") then
+            task.wait(0.5)
+            scanSinglePlot(plot)
+        end
+    end)
+    
+    task.spawn(function()
+        while task.wait(5) do
+            allAnimalsCache = {}
+            for _, plot in ipairs(plots:GetChildren()) do
+                if plot:IsA("Model") then
+                    scanSinglePlot(plot)
+                end
+            end
+        end
+    end)
+end
+
+local function findProximityPromptForAnimal(animalData)
+    if not animalData then return nil end
+    
+    local cachedPrompt = PromptMemoryCache[animalData.uid]
+    if cachedPrompt and cachedPrompt.Parent then
+        return cachedPrompt
+    end
+    
+    local plot = workspace.Plots:FindFirstChild(animalData.plot)
+    if not plot then return nil end
+    
+    local podiums = plot:FindFirstChild("AnimalPodiums")
+    if not podiums then return nil end
+    
+    local podium = podiums:FindFirstChild(animalData.slot)
+    if not podium then return nil end
+    
+    local base = podium:FindFirstChild("Base")
+    if not base then return nil end
+    
+    local spawn = base:FindFirstChild("Spawn")
+    if not spawn then return nil end
+    
+    local attach = spawn:FindFirstChild("PromptAttachment")
+    if not attach then return nil end
+    
+    for _, p in ipairs(attach:GetChildren()) do
+        if p:IsA("ProximityPrompt") then
+            PromptMemoryCache[animalData.uid] = p
+            return p
+        end
+    end
+    return nil
+end
+
+local function updatePlayerVelocity()
+    local hrp = getHRP()
+    if not hrp then return end
+    local currentPos = hrp.Position
+    if LastPlayerPosition then
+        PlayerVelocity = (currentPos - LastPlayerPosition) / task.wait()
+    end
+    LastPlayerPosition = currentPos
+end
+
+local function shouldSteal(animalData)
+    if not animalData or not animalData.worldPosition then return false end
+    local hrp = getHRP()
+    if not hrp then return false end
+    local currentDistance = (hrp.Position - animalData.worldPosition).Magnitude
+    return currentDistance <= AutoGrabRadius
+end
+
+local function buildStealCallbacks(prompt)
+    if InternalStealCache[prompt] then return end
+    
+    local data = {
+        holdCallbacks = {},
+        triggerCallbacks = {},
+        ready = true,
+    }
+    
+    local ok1, conns1 = pcall(getconnections, prompt.PromptButtonHoldBegan)
+    if ok1 and type(conns1) == "table" then
+        for _, conn in ipairs(conns1) do
+            if type(conn.Function) == "function" then
+                table.insert(data.holdCallbacks, conn.Function)
+            end
+        end
+    end
+    
+    local ok2, conns2 = pcall(getconnections, prompt.Triggered)
+    if ok2 and type(conns2) == "table" then
+        for _, conn in ipairs(conns2) do
+            if type(conn.Function) == "function" then
+                table.insert(data.triggerCallbacks, conn.Function)
+            end
+        end
+    end
+    
+    if (#data.holdCallbacks > 0) or (#data.triggerCallbacks > 0) then
+        InternalStealCache[prompt] = data
+    end
+end
+
+local function executeInternalStealAsync(prompt, animalData)
+    local data = InternalStealCache[prompt]
+    if not data or not data.ready then return false end
+    
+    data.ready = false
+    IsStealing = true
+    StealProgress = 0
+    CurrentStealTarget = animalData
+    StealStartTime = tick()
+    
+    task.spawn(function()
+        if #data.holdCallbacks > 0 then
+            for _, fn in ipairs(data.holdCallbacks) do
+                task.spawn(fn)
+            end
+        end
+        
+        local startTime = tick()
+        while tick() - startTime < 1.3 do
+            StealProgress = (tick() - startTime) / 1.3
+            task.wait(0.05)
+        end
+        
+        StealProgress = 1
+        
+        if #data.triggerCallbacks > 0 then
+            for _, fn in ipairs(data.triggerCallbacks) do
+                task.spawn(fn)
+            end
+        end
+        
+        task.wait(0.1)
+        data.ready = true
+        task.wait(0.3)
+        IsStealing = false
+        StealProgress = 0
+        CurrentStealTarget = nil
+    end)
+    
+    return true
+end
+
+local function attemptSteal(prompt, animalData)
+    if not prompt or not prompt.Parent then return false end
+    buildStealCallbacks(prompt)
+    if not InternalStealCache[prompt] then return false end
+    return executeInternalStealAsync(prompt, animalData)
+end
+
+local function getNearestAnimal()
+    local hrp = getHRP()
+    if not hrp then return nil end
+    
+    local nearest = nil
+    local minDist = math.huge
+    
+    for _, animalData in ipairs(allAnimalsCache) do
+        if isMyBase(animalData.plot) then
+            goto continue
+        end
+        if animalData.worldPosition then
+            local dist = (hrp.Position - animalData.worldPosition).Magnitude
+            if dist < minDist then
+                minDist = dist
+                nearest = animalData
+            end
+        end
+        ::continue::
+    end
+    
+    return nearest
+end
+
+local stealConnection = nil
+local velocityConnection = nil
+
+local function autoStealLoop()
+    if stealConnection then stealConnection:Disconnect() end
+    if velocityConnection then velocityConnection:Disconnect() end
+    
+    velocityConnection = RunService.Heartbeat:Connect(updatePlayerVelocity)
+    
+    stealConnection = RunService.Heartbeat:Connect(function()
+        if not AUTO_STEAL_NEAREST then return end
+        if IsStealing then return end
+        
+        local targetAnimal = getNearestAnimal()
+        if not targetAnimal then return end
+        if not shouldSteal(targetAnimal) then return end
+        
+        if LastTargetUID ~= targetAnimal.uid then
+            LastTargetUID = targetAnimal.uid
+        end
+        
+        local prompt = PromptMemoryCache[targetAnimal.uid]
+        if not prompt or not prompt.Parent then
+            prompt = findProximityPromptForAnimal(targetAnimal)
+        end
+        
+        if prompt then
+            attemptSteal(prompt, targetAnimal)
+        end
+    end)
+end
+
+-- Initialize auto grab
+initializeScanner()
+autoStealLoop()
+
+-- ============================================================
 -- SAVE CONFIGURATION SYSTEM
 -- ============================================================
 local ConfigFolder = "FiveHub_Configs"
@@ -77,7 +383,8 @@ local function SaveConfig(name)
         Enabled = Enabled,
         Values = Values,
         InfinityJump = infinityJumpEnabled,
-        JumpForce = jumpForce
+        JumpForce = jumpForce,
+        AutoGrabRadius = AutoGrabRadius
     }
     
     local success, json = pcall(function()
@@ -134,6 +441,10 @@ local function LoadConfig(name)
         if data.JumpForce then
             jumpForce = data.JumpForce
         end
+        if data.AutoGrabRadius then
+            AutoGrabRadius = data.AutoGrabRadius
+            Values.STEAL_RADIUS = data.AutoGrabRadius
+        end
         
         -- Update UI toggles
         for key, setter in pairs(VisualSetters) do
@@ -163,380 +474,6 @@ local function ListConfigs()
 end
 
 -- ============================================================
--- NEW AUTO GRAB SYSTEM (integrated)
--- ============================================================
-local AUTO_STEAL_NEAREST = false
-local AutoGrabCircle = {}
-local AutoGrabProgress = 0
-local AutoGrabIsStealing = false
-local AutoGrabTarget = nil
-local AutoGrabStartTime = 0
-local AutoGrabRadius = 20
-local AutoGrabCircleParts = {}
-local AutoGrabCircleEnabled = true
-local AutoGrabConnection = nil
-local AutoGrabVelocityConnection = nil
-local AutoGrabLastPlayerPosition = nil
-local AutoGrabPlayerVelocity = Vector3.zero
-local AutoGrabLastTargetUID = nil
-local AutoGrabPromptMemory = {}
-local AutoGrabInternalCache = {}
-local AutoGrabAnimalsCache = {}
-
--- Load AnimalsData if available
-local AnimalsData = nil
-pcall(function()
-    AnimalsData = require(ReplicatedStorage:WaitForChild("Datas"):WaitForChild("Animals"))
-end)
-
--- Helper functions for auto grab
-local function getHRP()
-    local char = Player.Character
-    if not char then return nil end
-    return char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso")
-end
-
-local function isMyBase(plotName)
-    local plots = workspace:FindFirstChild("Plots")
-    if not plots then return false end
-    local plot = plots:FindFirstChild(plotName)
-    if not plot then return false end
-    local sign = plot:FindFirstChild("PlotSign")
-    if sign then
-        local yourBase = sign:FindFirstChild("YourBase")
-        if yourBase and yourBase:IsA("BillboardGui") then
-            return yourBase.Enabled == true
-        end
-    end
-    return false
-end
-
-local function scanSinglePlot(plot)
-    if not plot or not plot:IsA("Model") then return end
-    if isMyBase(plot.Name) then return end
-    
-    local podiums = plot:FindFirstChild("AnimalPodiums")
-    if not podiums then return end
-    
-    for _, podium in ipairs(podiums:GetChildren()) do
-        if podium:IsA("Model") and podium:FindFirstChild("Base") then
-            local animalName = "Unknown"
-            local spawn = podium.Base:FindFirstChild("Spawn")
-            if spawn then
-                for _, child in ipairs(spawn:GetChildren()) do
-                    if child:IsA("Model") and child.Name ~= "PromptAttachment" then
-                        animalName = child.Name
-                        if AnimalsData and AnimalsData[animalName] and AnimalsData[animalName].DisplayName then
-                            animalName = AnimalsData[animalName].DisplayName
-                        end
-                        break
-                    end
-                end
-            end
-            table.insert(AutoGrabAnimalsCache, {
-                name = animalName,
-                plot = plot.Name,
-                slot = podium.Name,
-                worldPosition = podium:GetPivot().Position,
-                uid = plot.Name .. "_" .. podium.Name,
-            })
-        end
-    end
-end
-
-local function initializeAutoGrabScanner()
-    task.wait(2)
-    local plots = workspace:FindFirstChild("Plots")
-    if not plots then return end
-    
-    for _, plot in ipairs(plots:GetChildren()) do
-        if plot:IsA("Model") then
-            scanSinglePlot(plot)
-        end
-    end
-    
-    plots.ChildAdded:Connect(function(plot)
-        if plot:IsA("Model") then
-            task.wait(0.5)
-            scanSinglePlot(plot)
-        end
-    end)
-    
-    task.spawn(function()
-        while task.wait(5) do
-            AutoGrabAnimalsCache = {}
-            for _, plot in ipairs(plots:GetChildren()) do
-                if plot:IsA("Model") then
-                    scanSinglePlot(plot)
-                end
-            end
-        end
-    end)
-end
-
-local function findProximityPromptForAnimal(animalData)
-    if not animalData then return nil end
-    
-    local cachedPrompt = AutoGrabPromptMemory[animalData.uid]
-    if cachedPrompt and cachedPrompt.Parent then
-        return cachedPrompt
-    end
-    
-    local plots = workspace:FindFirstChild("Plots")
-    if not plots then return nil end
-    local plot = plots:FindFirstChild(animalData.plot)
-    if not plot then return nil end
-    
-    local podiums = plot:FindFirstChild("AnimalPodiums")
-    if not podiums then return nil end
-    local podium = podiums:FindFirstChild(animalData.slot)
-    if not podium then return nil end
-    
-    local base = podium:FindFirstChild("Base")
-    if not base then return nil end
-    local spawn = base:FindFirstChild("Spawn")
-    if not spawn then return nil end
-    
-    local attach = spawn:FindFirstChild("PromptAttachment")
-    if not attach then return nil end
-    
-    for _, p in ipairs(attach:GetChildren()) do
-        if p:IsA("ProximityPrompt") then
-            AutoGrabPromptMemory[animalData.uid] = p
-            return p
-        end
-    end
-    return nil
-end
-
-local function updateAutoGrabPlayerVelocity()
-    local hrp = getHRP()
-    if not hrp then return end
-    local currentPos = hrp.Position
-    if AutoGrabLastPlayerPosition then
-        AutoGrabPlayerVelocity = (currentPos - AutoGrabLastPlayerPosition) / task.wait()
-    end
-    AutoGrabLastPlayerPosition = currentPos
-end
-
-local function shouldAutoGrab(animalData)
-    if not animalData or not animalData.worldPosition then return false end
-    local hrp = getHRP()
-    if not hrp then return false end
-    local currentDistance = (hrp.Position - animalData.worldPosition).Magnitude
-    return currentDistance <= AutoGrabRadius
-end
-
-local function buildAutoGrabCallbacks(prompt)
-    if AutoGrabInternalCache[prompt] then return end
-    
-    local data = {
-        holdCallbacks = {},
-        triggerCallbacks = {},
-        ready = true,
-    }
-    
-    local ok1, conns1 = pcall(getconnections, prompt.PromptButtonHoldBegan)
-    if ok1 and type(conns1) == "table" then
-        for _, conn in ipairs(conns1) do
-            if type(conn.Function) == "function" then
-                table.insert(data.holdCallbacks, conn.Function)
-            end
-        end
-    end
-    
-    local ok2, conns2 = pcall(getconnections, prompt.Triggered)
-    if ok2 and type(conns2) == "table" then
-        for _, conn in ipairs(conns2) do
-            if type(conn.Function) == "function" then
-                table.insert(data.triggerCallbacks, conn.Function)
-            end
-        end
-    end
-    
-    if (#data.holdCallbacks > 0) or (#data.triggerCallbacks > 0) then
-        AutoGrabInternalCache[prompt] = data
-    end
-end
-
-local function executeAutoGrabAsync(prompt, animalData)
-    local data = AutoGrabInternalCache[prompt]
-    if not data or not data.ready then return false end
-    
-    data.ready = false
-    AutoGrabIsStealing = true
-    AutoGrabProgress = 0
-    AutoGrabTarget = animalData
-    AutoGrabStartTime = tick()
-    
-    task.spawn(function()
-        if #data.holdCallbacks > 0 then
-            for _, fn in ipairs(data.holdCallbacks) do
-                task.spawn(fn)
-            end
-        end
-        
-        local startTime = tick()
-        while tick() - startTime < 1.3 do
-            AutoGrabProgress = (tick() - startTime) / 1.3
-            task.wait(0.05)
-        end
-        
-        AutoGrabProgress = 1
-        
-        if #data.triggerCallbacks > 0 then
-            for _, fn in ipairs(data.triggerCallbacks) do
-                task.spawn(fn)
-            end
-        end
-        
-        task.wait(0.1)
-        data.ready = true
-        task.wait(0.3)
-        AutoGrabIsStealing = false
-        AutoGrabProgress = 0
-        AutoGrabTarget = nil
-    end)
-    
-    return true
-end
-
-local function attemptAutoGrab(prompt, animalData)
-    if not prompt or not prompt.Parent then return false end
-    buildAutoGrabCallbacks(prompt)
-    if not AutoGrabInternalCache[prompt] then return false end
-    return executeAutoGrabAsync(prompt, animalData)
-end
-
-local function getNearestAnimal()
-    local hrp = getHRP()
-    if not hrp then return nil end
-    
-    local nearest = nil
-    local minDist = math.huge
-    
-    for _, animalData in ipairs(AutoGrabAnimalsCache) do
-        if not isMyBase(animalData.plot) and animalData.worldPosition then
-            local dist = (hrp.Position - animalData.worldPosition).Magnitude
-            if dist < minDist then
-                minDist = dist
-                nearest = animalData
-            end
-        end
-    end
-    
-    return nearest
-end
-
-local function startAutoGrabLoop()
-    if AutoGrabConnection then AutoGrabConnection:Disconnect() end
-    if AutoGrabVelocityConnection then AutoGrabVelocityConnection:Disconnect() end
-    
-    AutoGrabVelocityConnection = RunService.Heartbeat:Connect(updateAutoGrabPlayerVelocity)
-    
-    AutoGrabConnection = RunService.Heartbeat:Connect(function()
-        if not AUTO_STEAL_NEAREST then return end
-        if AutoGrabIsStealing then return end
-        
-        local targetAnimal = getNearestAnimal()
-        if not targetAnimal then return end
-        if not shouldAutoGrab(targetAnimal) then return end
-        
-        if AutoGrabLastTargetUID ~= targetAnimal.uid then
-            AutoGrabLastTargetUID = targetAnimal.uid
-        end
-        
-        local prompt = AutoGrabPromptMemory[targetAnimal.uid]
-        if not prompt or not prompt.Parent then
-            prompt = findProximityPromptForAnimal(targetAnimal)
-        end
-        
-        if prompt then
-            attemptAutoGrab(prompt, targetAnimal)
-        end
-    end)
-end
-
--- Auto Grab Circle Visualization
-local function createAutoGrabCircle(character)
-    for _, part in ipairs(AutoGrabCircleParts) do
-        if part then pcall(function() part:Destroy() end) end
-    end
-    AutoGrabCircleParts = {}
-    
-    local root = character:FindFirstChild("HumanoidRootPart")
-    if not root then return end
-    
-    local partsCount = 65
-    local partThickness = 0.3
-    local partHeight = 0.2
-    local partColor = Color3.fromRGB(0, 255, 255)
-    
-    local points = {}
-    for i = 0, partsCount - 1 do
-        local angle = math.rad(i * 360 / partsCount)
-        table.insert(points, Vector3.new(math.cos(angle), 0, math.sin(angle)) * AutoGrabRadius)
-    end
-    
-    for i = 1, #points do
-        local nextIndex = i % #points + 1
-        local p1 = points[i]
-        local p2 = points[nextIndex]
-        
-        local part = Instance.new("Part")
-        part.Anchored = true
-        part.CanCollide = false
-        part.Size = Vector3.new((p2 - p1).Magnitude, partHeight, partThickness)
-        part.Color = partColor
-        part.Material = Enum.Material.Neon
-        part.Transparency = 0.3
-        part.TopSurface = Enum.SurfaceType.Smooth
-        part.BottomSurface = Enum.SurfaceType.Smooth
-        part.Parent = workspace
-        
-        table.insert(AutoGrabCircleParts, part)
-    end
-end
-
-local function updateAutoGrabCircle(character)
-    local root = character:FindFirstChild("HumanoidRootPart")
-    if not root then return end
-    
-    local partsCount = 65
-    local points = {}
-    for i = 0, partsCount - 1 do
-        local angle = math.rad(i * 360 / partsCount)
-        table.insert(points, Vector3.new(math.cos(angle), 0, math.sin(angle)) * AutoGrabRadius)
-    end
-    
-    for i, part in ipairs(AutoGrabCircleParts) do
-        local nextIndex = i % #points + 1
-        local p1 = points[i]
-        local p2 = points[nextIndex]
-        local center = (p1 + p2) / 2 + root.Position
-        part.CFrame = CFrame.new(center, center + Vector3.new(p2.X - p1.X, 0, p2.Z - p1.Z)) * CFrame.Angles(0, math.pi/2, 0)
-    end
-end
-
-local function onCharacterAddedForAutoGrab(character)
-    if AutoGrabCircleEnabled then
-        createAutoGrabCircle(character)
-        RunService:BindToRenderStep("AutoGrabCircle", Enum.RenderPriority.Camera.Value + 1, function()
-            updateAutoGrabCircle(character)
-        end)
-    end
-end
-
--- Initialize auto grab
-initializeAutoGrabScanner()
-startAutoGrabLoop()
-
-if Player.Character then
-    onCharacterAddedForAutoGrab(Player.Character)
-end
-Player.CharacterAdded:Connect(onCharacterAddedForAutoGrab)
-
--- ============================================================
 -- STATE
 -- ============================================================
 local Enabled = {
@@ -555,6 +492,7 @@ local Enabled = {
     AutoLeft = false,
     GalaxyMode = false,
     BatAimbot = false,
+    InfinityJump = false, -- Add InfinityJump toggle
 }
 
 local Values = {
@@ -1470,8 +1408,6 @@ local FONT_SLIDER = 9
 local TOGGLE_W = 32
 local TOGGLE_H2 = 16
 local DOT_S = 11
-local PBAR_W = 310
-local PBAR_H = 38
 
 local function Create(className, properties, children)
     local inst = Instance.new(className)
@@ -1609,9 +1545,12 @@ chBtn.MouseButton1Click:Connect(function()
     }):Play()
 end)
 
--- Drag support for circle logo
+-- Drag support for circle logo (only when unlocked)
 local cDrag, cDragStart, cDragPos, cMoved = false, nil, nil, false
+local UILocked = false
+
 chBtn.InputBegan:Connect(function(input)
+    if UILocked then return end
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         cDrag = true
         cMoved = false
@@ -1626,6 +1565,7 @@ chBtn.InputBegan:Connect(function(input)
 end)
 
 UserInputService.InputChanged:Connect(function(input)
+    if UILocked then return end
     if cDrag and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
         local delta = input.Position - cDragStart
         if delta.Magnitude > 4 then
@@ -1659,6 +1599,34 @@ Create("TextLabel", {
     Parent = TitleBar
 })
 
+-- Lock UI Button
+local LockBtn = Create("TextButton", {
+    BackgroundColor3 = Color3.fromRGB(50, 50, 50),
+    Position = UDim2.new(1, -52, 0.5, -9),
+    Size = UDim2.new(0, 18, 0, 18),
+    Font = Enum.Font.GothamBold,
+    Text = "🔓",
+    TextColor3 = Color3.new(1,1,1),
+    TextSize = 12,
+    AutoButtonColor = false,
+    ZIndex = 12,
+    Parent = TitleBar
+}, {
+    Create("UICorner", {CornerRadius=UDim.new(1,0)}),
+    Create("UIStroke", {Color=ORANGE_LIGHT, Thickness=2})
+})
+
+LockBtn.MouseButton1Click:Connect(function()
+    UILocked = not UILocked
+    if UILocked then
+        LockBtn.Text = "🔒"
+        LockBtn.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
+    else
+        LockBtn.Text = "🔓"
+        LockBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    end
+end)
+
 local CloseBtn = Create("TextButton", {
     BackgroundColor3 = ORANGE_DARK,
     Position = UDim2.new(1, -28, 0.5, -9),
@@ -1690,9 +1658,10 @@ Create("Frame", {
     Parent = PanelFrame
 })
 
--- Drag logic on title bar
+-- Drag logic on title bar (only when unlocked)
 local dragging, dragInput, dragStart, startPos
 TitleBar.InputBegan:Connect(function(input)
+    if UILocked then return end
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         dragging = true
         dragStart = input.Position
@@ -1706,12 +1675,14 @@ TitleBar.InputBegan:Connect(function(input)
 end)
 
 TitleBar.InputChanged:Connect(function(input)
+    if UILocked then return end
     if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
         dragInput = input
     end
 end)
 
 UserInputService.InputChanged:Connect(function(input)
+    if UILocked then return end
     if input == dragInput and dragging then
         local delta = input.Position - dragStart
         MainContainer.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
@@ -1851,6 +1822,11 @@ local function CreateToggle(parent, labelText, enabledKey, callback, order)
             AUTO_STEAL_NEAREST = isOn
         end
         
+        -- Special handling for InfinityJump
+        if enabledKey == "InfinityJump" then
+            infinityJumpEnabled = isOn
+        end
+        
         setVisual(isOn)
     end)
     return row
@@ -1942,86 +1918,6 @@ local function CreateSlider(parent, labelText, minVal, maxVal, valueKey, callbac
 end
 
 -- ============================================================
--- AUTO GRAB PROGRESS BAR (integrated with main UI)
--- ============================================================
-local AutoGrabProgressBar = Instance.new("Frame")
-AutoGrabProgressBar.Size = UDim2.new(0, 220, 0, 22)
-AutoGrabProgressBar.Position = UDim2.new(0.5, -110, 1, -160)
-AutoGrabProgressBar.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-AutoGrabProgressBar.BackgroundTransparency = 0.2
-AutoGrabProgressBar.BorderSizePixel = 0
-AutoGrabProgressBar.Visible = true
-AutoGrabProgressBar.Parent = ScreenGui
-
-local AutoGrabCorner = Instance.new("UICorner")
-AutoGrabCorner.CornerRadius = UDim.new(0, 6)
-AutoGrabCorner.Parent = AutoGrabProgressBar
-
-local AutoGrabStroke = Instance.new("UIStroke")
-AutoGrabStroke.Thickness = 1.2
-AutoGrabStroke.Transparency = 0
-AutoGrabStroke.Color = Color3.fromRGB(255, 255, 255)
-AutoGrabStroke.Parent = AutoGrabProgressBar
-
-local AutoGrabGradient = Instance.new("UIGradient")
-AutoGrabGradient.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0.00, Color3.fromRGB(255, 50, 50)),
-    ColorSequenceKeypoint.new(0.20, Color3.fromRGB(0, 0, 0)),
-    ColorSequenceKeypoint.new(0.50, Color3.fromRGB(255, 50, 50)),
-    ColorSequenceKeypoint.new(0.80, Color3.fromRGB(0, 0, 0)),
-    ColorSequenceKeypoint.new(1.00, Color3.fromRGB(255, 50, 50))
-})
-AutoGrabGradient.Parent = AutoGrabStroke
-
--- Progress bar background
-local AutoGrabProgressBg = Instance.new("Frame")
-AutoGrabProgressBg.Size = UDim2.new(0.9, 0, 0, 8)
-AutoGrabProgressBg.Position = UDim2.new(0.05, 0, 0.5, -4)
-AutoGrabProgressBg.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-AutoGrabProgressBg.BorderSizePixel = 0
-AutoGrabProgressBg.Parent = AutoGrabProgressBar
-
-local AutoGrabProgressBgCorner = Instance.new("UICorner")
-AutoGrabProgressBgCorner.CornerRadius = UDim.new(1, 0)
-AutoGrabProgressBgCorner.Parent = AutoGrabProgressBg
-
--- Progress bar fill
-local AutoGrabProgressFill = Instance.new("Frame")
-AutoGrabProgressFill.Size = UDim2.new(0, 0, 1, 0)
-AutoGrabProgressFill.Position = UDim2.new(0, 0, 0, 0)
-AutoGrabProgressFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-AutoGrabProgressFill.BorderSizePixel = 0
-AutoGrabProgressFill.Parent = AutoGrabProgressBg
-
-local AutoGrabFillCorner = Instance.new("UICorner")
-AutoGrabFillCorner.CornerRadius = UDim.new(1, 0)
-AutoGrabFillCorner.Parent = AutoGrabProgressFill
-
-local AutoGrabFillGradient = Instance.new("UIGradient")
-AutoGrabFillGradient.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 50, 50)),
-    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 150, 50)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 50, 50))
-})
-AutoGrabFillGradient.Parent = AutoGrabProgressFill
-
--- Update auto grab progress
-task.spawn(function()
-    while task.wait(0.03) do
-        if AutoGrabIsStealing then
-            AutoGrabProgressFill.Size = UDim2.new(AutoGrabProgress, 0, 1, 0)
-        else
-            if AutoGrabProgressFill.Size.X.Scale > 0 then
-                AutoGrabProgressFill.Size = UDim2.new(
-                    math.max(0, AutoGrabProgressFill.Size.X.Scale - 0.03),
-                    0, 1, 0
-                )
-            end
-        end
-    end
-end)
-
--- ============================================================
 -- POPULATE SINGLE COLUMN: MOVEMENT SECTION
 -- ============================================================
 local order = 1
@@ -2062,7 +1958,6 @@ order += 1
 CreateToggle(ScrollFrame, "Auto Grab", "AutoSteal", function(s)
     Enabled.AutoSteal = s
     AUTO_STEAL_NEAREST = s
-    -- No need for extra UI, main toggle handles it
 end, order)
 order += 1
 CreateSlider(ScrollFrame, "Grab Radius", 5, 100, "STEAL_RADIUS", function(v)
@@ -2418,7 +2313,10 @@ local function CreateFloatingButton(labelText, icon, defaultPos, enabledKey, onT
         Parent = btnFrame
     })
     local fDragging, fDragStart, fStartPos, fMoved = false, nil, nil, false
+    
+    -- Modify drag behavior to respect UI lock
     clickBtn.InputBegan:Connect(function(input)
+        if UILocked then return end
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             fDragging = true
             fMoved = false
@@ -2431,7 +2329,9 @@ local function CreateFloatingButton(labelText, icon, defaultPos, enabledKey, onT
             end)
         end
     end)
+    
     UserInputService.InputChanged:Connect(function(input)
+        if UILocked then return end
         if fDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
             local delta = input.Position - fDragStart
             if delta.Magnitude > 5 then
@@ -2440,6 +2340,7 @@ local function CreateFloatingButton(labelText, icon, defaultPos, enabledKey, onT
             end
         end
     end)
+    
     clickBtn.MouseButton1Click:Connect(function()
         if fMoved then return end
         isActive = not isActive
