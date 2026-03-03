@@ -49,6 +49,17 @@ UserInputService.JumpRequest:Connect(function()
 end)
 
 -- ============================================================
+-- TELEPORT POSITIONS (LSC)
+-- ============================================================
+local tpPositions = {
+    finalPos1 = Vector3.new(-483.59, -5.04, 104.24),  -- Left side final
+    finalPos2 = Vector3.new(-483.51, -5.10, 18.89),  -- Right side final
+    checkpointA = Vector3.new(-472.60, -7.00, 57.52),
+    checkpointB1 = Vector3.new(-472.65, -7.00, 95.69), -- Left checkpoint
+    checkpointB2 = Vector3.new(-471.76, -7.00, 26.22), -- Right checkpoint
+}
+
+-- ============================================================
 -- STATE
 -- ============================================================
 local ConfigFileName = "FIVE_HUB_Config.json"
@@ -66,11 +77,12 @@ local Enabled = {
     AutoWalkEnabled = false,
     AutoRightEnabled = false,
     ScriptUserESP = true,
-    InfiniteJump = true,    -- Linked to infinityJumpEnabled
+    InfiniteJump = true,
     NoDie = false,
     Aimbot = false,
     Float = false,
     FullAutoDuel = false,
+    TpEnabled = true,  -- TP toggle
 }
 local Values = {
     BoostSpeed = 30,
@@ -84,8 +96,11 @@ local Values = {
     HOP_COOLDOWN = 0.08,
     FOV = 70,
     FloatHeight = 8,
-    JumpForce = 50,          -- For infinite jump
-    ClampFallSpeed = 80,     -- For infinite jump
+    JumpForce = 50,
+    ClampFallSpeed = 80,
+    TpSpeed = 0.1,  -- TP speed
+    StealCooldown = 0.2,  -- NEW: from sourceshub
+    HoldDuration = 0.5,   -- NEW: from sourceshub
 }
 local KEYBINDS = {
     SPEED = Enum.KeyCode.V,
@@ -97,7 +112,7 @@ local KEYBINDS = {
     AIMBOT = Enum.KeyCode.Unknown,
     FLOAT = Enum.KeyCode.Unknown,
     FULLAUTODUEL = Enum.KeyCode.Unknown,
-    INFJUMP = Enum.KeyCode.X,   -- Keybind for toggling infinite jump
+    INFJUMP = Enum.KeyCode.X,
 }
 
 -- ============================================================
@@ -739,103 +754,132 @@ local function stopSpeedWhileStealing()
     if Connections.speedWhileStealing then Connections.speedWhileStealing:Disconnect(); Connections.speedWhileStealing=nil end
 end
 
--- AUTO GRAB
+-- ============================================================
+-- AUTO GRAB (UPDATED - from .gg/sourceshub)
+-- ============================================================
 local ProgressBarFill, ProgressPercentLabel
 local isStealing = false
 local stealStartTime = nil
 local progressConnection = nil
-local StealData = {}
-local function isMyPlotByName(pn)
-    local plots=workspace:FindFirstChild("Plots")
-    if not plots then return false end
-    local plot=plots:FindFirstChild(pn)
-    if not plot then return false end
-    local sign=plot:FindFirstChild("PlotSign")
-    if sign then
-        local yb=sign:FindFirstChild("YourBase")
-        if yb and yb:IsA("BillboardGui") then return yb.Enabled==true end
-    end
-    return false
+
+local function getPromptPart(prompt)
+    local parent = prompt.Parent
+    if parent:IsA("BasePart") then return parent end
+    if parent:IsA("Model") then return parent.PrimaryPart or parent:FindFirstChildWhichIsA("BasePart") end
+    if parent:IsA("Attachment") then return parent.Parent end
+    return parent:FindFirstChildWhichIsA("BasePart", true)
 end
-local function findNearestPrompt()
-    local h=Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
-    if not h then return nil end
-    local plots=workspace:FindFirstChild("Plots")
+
+local function findNearestStealPrompt()
+    local HRP = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+    if not HRP then return nil end
+    
+    local nearestPrompt = nil
+    local minDist = math.huge
+    local plots = workspace:FindFirstChild("Plots")
     if not plots then return nil end
-    local np,nd,nn=nil,math.huge,nil
-    for _,plot in ipairs(plots:GetChildren()) do
-        if isMyPlotByName(plot.Name) then continue end
-        local podiums=plot:FindFirstChild("AnimalPodiums")
-        if not podiums then continue end
-        for _,pod in ipairs(podiums:GetChildren()) do
-            pcall(function()
-                local base=pod:FindFirstChild("Base")
-                local spawn=base and base:FindFirstChild("Spawn")
-                if spawn then
-                    local dist=(spawn.Position-h.Position).Magnitude
-                    if dist<nd and dist<=Values.STEAL_RADIUS then
-                        local att=spawn:FindFirstChild("PromptAttachment")
-                        if att then
-                            for _,ch in ipairs(att:GetChildren()) do
-                                if ch:IsA("ProximityPrompt") then np,nd,nn=ch,dist,pod.Name; break end
-                            end
-                        end
-                    end
-                end
-            end)
-        end
-    end
-    return np,nd,nn
-end
-local function ResetProgressBar()
-    if ProgressPercentLabel then ProgressPercentLabel.Text="0%" end
-    if ProgressBarFill then ProgressBarFill.Size=UDim2.new(0,0,1,0) end
-end
-local function executeSteal(prompt,name)
-    if isStealing then return end
-    if not StealData[prompt] then
-        StealData[prompt]={hold={},trigger={},ready=true}
-        pcall(function()
-            if getconnections then
-                for _,c in ipairs(getconnections(prompt.PromptButtonHoldBegan)) do
-                    if c.Function then table.insert(StealData[prompt].hold,c.Function) end
-                end
-                for _,c in ipairs(getconnections(prompt.Triggered)) do
-                    if c.Function then table.insert(StealData[prompt].trigger,c.Function) end
+    
+    for _, desc in pairs(plots:GetDescendants()) do
+        if desc:IsA("ProximityPrompt") and desc.Enabled and desc.ActionText == "Steal" then
+            local part = getPromptPart(desc)
+            if part then
+                local dist = (HRP.Position - part.Position).Magnitude
+                if dist < minDist then
+                    minDist = dist
+                    nearestPrompt = desc
                 end
             end
+        end
+    end
+    return nearestPrompt
+end
+
+local function triggerPrompt(prompt)
+    if not prompt or not prompt:IsDescendantOf(workspace) then return end
+    
+    -- Set prompt properties for maximum range
+    prompt.MaxActivationDistance = 9e9
+    prompt.RequiresLineOfSight = false
+    prompt.ClickablePrompt = true
+    
+    -- Try using fireproximityprompt first (executor function)
+    local usedFire = pcall(function()
+        fireproximityprompt(prompt, 9e9, Values.HoldDuration)
+    end)
+    
+    -- Fallback method if fireproximityprompt is not available
+    if not usedFire then
+        pcall(function()
+            prompt:InputHoldBegin()
+            task.wait(Values.HoldDuration)
+            prompt:InputHoldEnd()
         end)
     end
-    local data=StealData[prompt]
-    if not data.ready then return end
-    data.ready=false; isStealing=true; stealStartTime=tick()
-    if progressConnection then progressConnection:Disconnect() end
-    progressConnection=RunService.Heartbeat:Connect(function()
-        if not isStealing then progressConnection:Disconnect(); return end
-        local prog=math.clamp((tick()-stealStartTime)/Values.STEAL_DURATION,0,1)
-        if ProgressBarFill then ProgressBarFill.Size=UDim2.new(prog,0,1,0) end
-        if ProgressPercentLabel then ProgressPercentLabel.Text=math.floor(prog*100).."%" end
-    end)
-    task.spawn(function()
-        for _,f in ipairs(data.hold) do task.spawn(f) end
-        task.wait(Values.STEAL_DURATION)
-        for _,f in ipairs(data.trigger) do task.spawn(f) end
+    
+    -- Visual feedback (progress bar)
+    if not isStealing then
+        isStealing = true
+        stealStartTime = tick()
+        
         if progressConnection then progressConnection:Disconnect() end
-        ResetProgressBar(); data.ready=true; task.wait(0.3); isStealing=false
-    end)
+        progressConnection = RunService.Heartbeat:Connect(function()
+            if not isStealing then 
+                progressConnection:Disconnect() 
+                return 
+            end
+            local prog = math.clamp((tick() - stealStartTime) / Values.HoldDuration, 0, 1)
+            if ProgressBarFill then 
+                ProgressBarFill.Size = UDim2.new(prog, 0, 1, 0) 
+            end
+            if ProgressPercentLabel then 
+                ProgressPercentLabel.Text = math.floor(prog * 100) .. "%" 
+            end
+        end)
+        
+        task.wait(Values.HoldDuration + 0.1)
+        isStealing = false
+        if progressConnection then progressConnection:Disconnect() end
+        if ProgressBarFill then ProgressBarFill.Size = UDim2.new(0, 0, 1, 0) end
+        if ProgressPercentLabel then ProgressPercentLabel.Text = "0%" end
+    end
 end
+
 local function startAutoSteal()
     if Connections.autoSteal then return end
-    Connections.autoSteal=RunService.Heartbeat:Connect(function()
+    
+    Connections.autoSteal = RunService.Heartbeat:Connect(function()
         if not Enabled.AutoSteal or isStealing then return end
-        local p,_,n=findNearestPrompt()
-        if p then executeSteal(p,n) end
+        
+        local prompt = findNearestStealPrompt()
+        if prompt then
+            triggerPrompt(prompt)
+        end
     end)
 end
+
 local function stopAutoSteal()
-    if Connections.autoSteal then Connections.autoSteal:Disconnect(); Connections.autoSteal=nil end
-    isStealing=false; ResetProgressBar()
+    if Connections.autoSteal then 
+        Connections.autoSteal:Disconnect() 
+        Connections.autoSteal = nil 
+    end
+    isStealing = false
+    if ProgressBarFill then ProgressBarFill.Size = UDim2.new(0, 0, 1, 0) end
+    if ProgressPercentLabel then ProgressPercentLabel.Text = "0%" end
 end
+
+-- Character respawn handling
+Player.CharacterAdded:Connect(function()
+    task.wait(1)
+    if Enabled.AutoSteal then
+        stopAutoSteal()
+        task.wait(0.1)
+        startAutoSteal()
+    end
+end)
+
+-- ============================================================
+-- OTHER BACKEND (existing)
+-- ============================================================
 local savedAnimations={}
 local function startUnwalk()
     local c=Player.Character
@@ -878,80 +922,154 @@ local function disableOptimizer()
         originalTransparency={}; xrayEnabled=false
     end
 end
-local abActive=false; local _abMoveConn,_abNdConn,_abNdHumConn,_abTarget
-local abVisualSetter=nil
+
+-- ============================================================
+-- FIXED AIMBOT
+-- ============================================================
+local abActive = false
+local _abMoveConn, _abNdConn, _abNdHumConn, _abTarget
+local abVisualSetter = nil
+
 local function _abApplyNoDie(char)
     if _abNdConn then _abNdConn:Disconnect(); _abNdConn=nil end
     if _abNdHumConn then _abNdHumConn:Disconnect(); _abNdHumConn=nil end
-    local hum=char and char:FindFirstChildOfClass("Humanoid")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
     if not hum then return end
-    pcall(function() hum.MaxHealth=math.huge end); pcall(function() hum.Health=math.huge end)
-    _abNdHumConn=hum:GetPropertyChangedSignal("Health"):Connect(function()
+    pcall(function() hum.MaxHealth = math.huge end)
+    pcall(function() hum.Health = math.huge end)
+    _abNdHumConn = hum:GetPropertyChangedSignal("Health"):Connect(function()
         if not abActive then return end
-        pcall(function() if hum.Health<1 then hum.Health=hum.MaxHealth end end)
+        pcall(function() if hum.Health < 1 then hum.Health = hum.MaxHealth end end)
     end)
-    _abNdConn=RunService.Heartbeat:Connect(function()
+    _abNdConn = RunService.Heartbeat:Connect(function()
         if not abActive then return end
         pcall(function()
             if not hum or not hum.Parent then return end
-            if hum.Health<hum.MaxHealth then hum.Health=hum.MaxHealth end
-            local s=hum:GetState()
-            if s==Enum.HumanoidStateType.Dead or s==Enum.HumanoidStateType.Ragdoll or s==Enum.HumanoidStateType.FallingDown then
+            if hum.Health < hum.MaxHealth then hum.Health = hum.MaxHealth end
+            local s = hum:GetState()
+            if s == Enum.HumanoidStateType.Dead or s == Enum.HumanoidStateType.Ragdoll or s == Enum.HumanoidStateType.FallingDown then
                 hum:ChangeState(Enum.HumanoidStateType.Running)
             end
         end)
     end)
 end
+
 local function _abStop()
-    if _abMoveConn then _abMoveConn:Disconnect(); _abMoveConn=nil end
-    if _abNdConn then _abNdConn:Disconnect(); _abNdConn=nil end
-    if _abNdHumConn then _abNdHumConn:Disconnect(); _abNdHumConn=nil end
-    _abTarget=nil
+    if _abMoveConn then _abMoveConn:Disconnect(); _abMoveConn = nil end
+    if _abNdConn then _abNdConn:Disconnect(); _abNdConn = nil end
+    if _abNdHumConn then _abNdHumConn:Disconnect(); _abNdHumConn = nil end
+    _abTarget = nil
     pcall(function()
-        local hum=Player.Character and Player.Character:FindFirstChildOfClass("Humanoid")
-        if hum then hum.MaxHealth=100; hum:Move(Vector3.zero,false) end
+        local hum = Player.Character and Player.Character:FindFirstChildOfClass("Humanoid")
+        if hum then hum.MaxHealth = 100; hum:Move(Vector3.zero, false) end
     end)
 end
+
 local function _abStart()
     _abStop()
-    local char=Player.Character
+    local char = Player.Character
     if char then _abApplyNoDie(char) end
-    _abMoveConn=RunService.Heartbeat:Connect(function()
+    _abMoveConn = RunService.Heartbeat:Connect(function()
         if not abActive then return end
         pcall(function()
-            local myChar=Player.Character
+            local myChar = Player.Character
             if not myChar then return end
-            local myHRP=myChar:FindFirstChild("HumanoidRootPart")
-            local myHum=myChar:FindFirstChildOfClass("Humanoid")
+            local myHRP = myChar:FindFirstChild("HumanoidRootPart")
+            local myHum = myChar:FindFirstChildOfClass("Humanoid")
             if not myHRP or not myHum then return end
-            local nearest,bestDist=nil,math.huge
-            for _,p in ipairs(Players:GetPlayers()) do
-                if p~=Player and p.Character then
-                    local oh=p.Character:FindFirstChild("HumanoidRootPart")
+            
+            local nearest, bestDist = nil, math.huge
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= Player and p.Character then
+                    local oh = p.Character:FindFirstChild("HumanoidRootPart")
                     if oh then
-                        local d=(myHRP.Position-oh.Position).Magnitude
-                        if d<bestDist then bestDist=d; nearest=p end
+                        local d = (myHRP.Position - oh.Position).Magnitude
+                        if d < bestDist then 
+                            bestDist = d
+                            nearest = p
+                        end
                     end
                 end
             end
-            _abTarget=nearest
+            
+            _abTarget = nearest
             if not _abTarget or not _abTarget.Character then return end
-            local tHRP=_abTarget.Character:FindFirstChild("HumanoidRootPart")
+            
+            local tHRP = _abTarget.Character:FindFirstChild("HumanoidRootPart")
             if not tHRP then return end
-            local flat=Vector3.new((tHRP.Position-myHRP.Position).X,0,(tHRP.Position-myHRP.Position).Z)
-            if flat.Magnitude<3 then myHum:Move(Vector3.zero,false); return end
-            local unit=flat.Unit; myHum:Move(unit,false)
-            myHRP.AssemblyLinearVelocity=Vector3.new(unit.X*Values.BoostSpeed,myHRP.AssemblyLinearVelocity.Y,unit.Z*Values.BoostSpeed)
-            pcall(function() myHRP.CFrame=CFrame.new(myHRP.Position,myHRP.Position+flat) end)
+            
+            local direction = tHRP.Position - myHRP.Position
+            local distance = direction.Magnitude
+            
+            if distance < 3 then
+                myHum:Move(Vector3.zero, false)
+                return
+            end
+            
+            local unitDir = direction.Unit
+            
+            myHum:Move(unitDir, false)
+            
+            myHRP.AssemblyLinearVelocity = Vector3.new(
+                unitDir.X * Values.BoostSpeed,
+                unitDir.Y * Values.BoostSpeed,
+                unitDir.Z * Values.BoostSpeed
+            )
+            
+            pcall(function() 
+                myHRP.CFrame = CFrame.lookAt(myHRP.Position, Vector3.new(tHRP.Position.X, myHRP.Position.Y, tHRP.Position.Z))
+            end)
         end)
     end)
 end
+
 local function abToggle()
-    abActive=not abActive
-    if abActive then _abStart() else _abStop() end
+    abActive = not abActive
+    if abActive then 
+        _abStart() 
+    else 
+        _abStop() 
+    end
     if abVisualSetter then abVisualSetter(abActive) end
 end
-Player.CharacterAdded:Connect(function(nc) if not abActive then return end task.wait(0.5); _abApplyNoDie(nc); _abStart() end)
+
+Player.CharacterAdded:Connect(function(nc) 
+    if not abActive then return end 
+    task.wait(0.5)
+    _abApplyNoDie(nc)
+    _abStart() 
+end)
+
+-- ============================================================
+-- TELEPORT FUNCTIONS
+-- ============================================================
+local function move(pos)
+    if not Enabled.TpEnabled then return end
+    local char = Player.Character
+    if char then
+        char:PivotTo(CFrame.new(pos))
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            hrp.AssemblyLinearVelocity = Vector3.new(0,0,0)
+        end
+    end
+end
+
+local function teleportLeft()
+    move(tpPositions.checkpointA)
+    task.wait(Values.TpSpeed)
+    move(tpPositions.checkpointB1)
+    task.wait(Values.TpSpeed)
+    move(tpPositions.finalPos1)
+end
+
+local function teleportRight()
+    move(tpPositions.checkpointA)
+    task.wait(Values.TpSpeed)
+    move(tpPositions.checkpointB2)
+    task.wait(Values.TpSpeed)
+    move(tpPositions.finalPos2)
+end
 
 -- ============================================================
 -- SPEED LABEL ABOVE CHARACTER
@@ -1299,7 +1417,7 @@ local function createButtonRow(order, txt, bgCol, strokeCol, callback)
 end
 
 -- ============================================================
--- PROGRESS BAR
+-- PROGRESS BAR (for Auto Grab)
 -- ============================================================
 local PB_W = math.floor(390*GS)
 local PB_H = math.floor(52*GS)
@@ -1314,6 +1432,8 @@ ProgressPercentLabel.BackgroundTransparency=1; ProgressPercentLabel.Text="0%"
 ProgressPercentLabel.TextColor3=C.white; ProgressPercentLabel.Font=Enum.Font.GothamBlack
 ProgressPercentLabel.TextSize=math.floor(19*GS); ProgressPercentLabel.TextXAlignment=Enum.TextXAlignment.Center
 ProgressPercentLabel.ZIndex=3
+
+-- Auto Grab settings inputs (from sourceshub)
 local IW = math.floor(42*GS)
 local IH = math.floor(28*GS)
 local function makePBInput(xOffset, labelStr, valueKey, isFloat, minV, maxV)
@@ -1339,8 +1459,11 @@ local function makePBInput(xOffset, labelStr, valueKey, isFloat, minV, maxV)
         else box.Text=tostring(Values[valueKey]) end
     end)
 end
-makePBInput(math.floor(8*GS), "RADIUS", "STEAL_RADIUS", false, 5, 100)
-makePBInput(math.floor(8*GS)+IW+6, "SPEED", "STEAL_DURATION", true, 0.05, 5 )
+
+-- Auto Grab inputs (Steal Cooldown and Hold Duration)
+makePBInput(math.floor(8*GS), "CD", "StealCooldown", true, 0.05, 2.0)  -- Cooldown between steals
+makePBInput(math.floor(8*GS)+IW+6, "HOLD", "HoldDuration", true, 0.1, 2.0)  -- Hold duration
+
 local pbTrack = Instance.new("Frame", progBar)
 pbTrack.Size=UDim2.new(1,-math.floor(16*GS),0,math.floor(7*GS))
 pbTrack.Position=UDim2.new(0,math.floor(8*GS),1,-math.floor(10*GS))
@@ -1421,6 +1544,60 @@ if not isMobile then
     o+=1
     abVisualSetter = function(on) if VisualSetters.Aimbot then VisualSetters.Aimbot(on,true) end end
 end
+
+-- TELEPORT SECTION (NEW)
+createSectionHeader(o,"TELEPORT")
+o+=1
+createToggle(o,"Enable TP","TpEnabled", function(s) Enabled.TpEnabled=s end, nil, nil)
+o+=1
+
+-- TP LEFT Button (as a toggle-style row but actually a button)
+local tpLeftRow = Instance.new("Frame", scroll)
+tpLeftRow.Size=UDim2.new(1,0,0,ROW_H); tpLeftRow.BackgroundColor3=C.bgRow
+tpLeftRow.BorderSizePixel=0; tpLeftRow.LayoutOrder=o
+rc(tpLeftRow, CR); st(tpLeftRow, 2, C.border, 0.45)
+o+=1
+
+local tpLeftLbl = Instance.new("TextLabel", tpLeftRow)
+tpLeftLbl.Size=UDim2.new(0.7,0,1,0); tpLeftLbl.Position=UDim2.new(0,math.floor(10*GS),0,0)
+tpLeftLbl.BackgroundTransparency=1; tpLeftLbl.Text="TP LEFT"
+tpLeftLbl.TextColor3=C.white; tpLeftLbl.Font=Enum.Font.GothamSemibold
+tpLeftLbl.TextSize=math.floor(11*GS); tpLeftLbl.TextXAlignment=Enum.TextXAlignment.Left
+
+local tpLeftBtn = Instance.new("TextButton", tpLeftRow)
+tpLeftBtn.Size=UDim2.new(0,60,0,26); tpLeftBtn.Position=UDim2.new(1,-70,0.5,-13)
+tpLeftBtn.BackgroundColor3=C.bgRow; tpLeftBtn.Text="GO"
+tpLeftBtn.TextColor3=C.white; tpLeftBtn.Font=Enum.Font.GothamBold
+tpLeftBtn.TextSize=math.floor(11*GS); tpLeftBtn.BorderSizePixel=0
+rc(tpLeftBtn, 8); st(tpLeftBtn, 1.5, C.border, 0.4)
+tpLeftBtn.MouseButton1Click:Connect(teleportLeft)
+
+-- TP RIGHT Button
+local tpRightRow = Instance.new("Frame", scroll)
+tpRightRow.Size=UDim2.new(1,0,0,ROW_H); tpRightRow.BackgroundColor3=C.bgRow
+tpRightRow.BorderSizePixel=0; tpRightRow.LayoutOrder=o
+rc(tpRightRow, CR); st(tpRightRow, 2, C.border, 0.45)
+o+=1
+
+local tpRightLbl = Instance.new("TextLabel", tpRightRow)
+tpRightLbl.Size=UDim2.new(0.7,0,1,0); tpRightLbl.Position=UDim2.new(0,math.floor(10*GS),0,0)
+tpRightLbl.BackgroundTransparency=1; tpRightLbl.Text="TP RIGHT"
+tpRightLbl.TextColor3=C.white; tpRightLbl.Font=Enum.Font.GothamSemibold
+tpRightLbl.TextSize=math.floor(11*GS); tpRightLbl.TextXAlignment=Enum.TextXAlignment.Left
+
+local tpRightBtn = Instance.new("TextButton", tpRightRow)
+tpRightBtn.Size=UDim2.new(0,60,0,26); tpRightBtn.Position=UDim2.new(1,-70,0.5,-13)
+tpRightBtn.BackgroundColor3=C.bgRow; tpRightBtn.Text="GO"
+tpRightBtn.TextColor3=C.white; tpRightBtn.Font=Enum.Font.GothamBold
+tpRightBtn.TextSize=math.floor(11*GS); tpRightBtn.BorderSizePixel=0
+rc(tpRightBtn, 8); st(tpRightBtn, 1.5, C.border, 0.4)
+tpRightBtn.MouseButton1Click:Connect(teleportRight)
+
+-- TP Speed Slider
+createSlider(o,"TP Speed",0.05,0.5,"TpSpeed",function(v) Values.TpSpeed=v end)
+o+=1
+
+-- CONFIG SECTION
 createSectionHeader(o,"CONFIG")
 o+=1
 createButtonRow(o,"💾 SAVE CONFIG",Color3.fromRGB(28,28,28),C.dim, function(btn)
@@ -1436,10 +1613,8 @@ createButtonRow(o,"🗑 RESET CONFIG",Color3.fromRGB(55,10,10),C.dangerDark, fun
     Values.BoostSpeed=30; Values.SpinSpeed=30; Values.StealingSpeedValue=29
     Values.STEAL_RADIUS=20; Values.STEAL_DURATION=1.3; Values.DEFAULT_GRAVITY=196.2
     Values.GalaxyGravityPercent=70; Values.HOP_POWER=35; Values.HOP_COOLDOWN=0.08
-    Values.FOV=70
-    Values.FloatHeight=8
-    Values.JumpForce=50
-    Values.ClampFallSpeed=80
+    Values.FOV=70; Values.FloatHeight=8; Values.JumpForce=50; Values.ClampFallSpeed=80
+    Values.TpSpeed=0.1; Values.StealCooldown=0.2; Values.HoldDuration=0.5
     KEYBINDS.SPEED=Enum.KeyCode.V; KEYBINDS.SPIN=Enum.KeyCode.N; KEYBINDS.GALAXY=Enum.KeyCode.M
     KEYBINDS.AUTOLEFT=Enum.KeyCode.Z; KEYBINDS.AUTORIGHT=Enum.KeyCode.C
     KEYBINDS.ANTIRAGDOLL=Enum.KeyCode.Unknown; KEYBINDS.AIMBOT=Enum.KeyCode.Unknown
@@ -1475,6 +1650,187 @@ onTap(miniBtn, function() main.Visible=true; miniBtn.Visible=false; playSound("r
 onTap(closeBtn, function() main.Visible=false; miniBtn.Visible=true; playSound("rbxassetid://6895079813",0.4,1) end)
 
 -- ============================================================
+-- MOBILE FLOATING BUTTONS (EDITED - inalis ang speed boost at inf jump)
+-- ============================================================
+if isMobile then
+    local mobSG = Instance.new("ScreenGui")
+    mobSG.Name="FIVE_MOB"; mobSG.ResetOnSpawn=false; mobSG.DisplayOrder=999; mobSG.Parent=Player.PlayerGui
+    local function makeDraggableMobBtn(parent, defaultPos, topLabel)
+        local BTN_W = 108
+        local BTN_H = 50
+        local DRAG_THRESHOLD = 8
+        local glow = Instance.new("Frame", parent)
+        glow.Size = UDim2.new(0, BTN_W + 8, 0, BTN_H + 8)
+        glow.Position = UDim2.new(0, defaultPos.X - 4, 0, defaultPos.Y - 4)
+        glow.BackgroundColor3 = C.white
+        glow.BackgroundTransparency = 0.92
+        glow.BorderSizePixel = 0
+        rc(glow, 15)
+        local cont = Instance.new("Frame", parent)
+        cont.Size = UDim2.new(0, BTN_W, 0, BTN_H)
+        cont.Position = UDim2.new(0, defaultPos.X, 0, defaultPos.Y)
+        cont.BackgroundColor3 = Color3.fromRGB(14, 14, 14)
+        cont.BorderSizePixel = 0
+        rc(cont, 12)
+        local stroke = Instance.new("UIStroke", cont)
+        stroke.Thickness = 2; stroke.Color = C.dim
+        stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        local topLbl = Instance.new("TextLabel", cont)
+        topLbl.Size = UDim2.new(1, -8, 0.5, -1)
+        topLbl.Position = UDim2.new(0, 4, 0, 2)
+        topLbl.BackgroundTransparency = 1
+        topLbl.Text = topLabel
+        topLbl.TextColor3 = C.muted
+        topLbl.Font = Enum.Font.GothamBlack
+        topLbl.TextSize = 11
+        topLbl.TextScaled = false
+        topLbl.TextXAlignment = Enum.TextXAlignment.Center
+        local statLbl = Instance.new("TextLabel", cont)
+        statLbl.Size = UDim2.new(1, -8, 0.5, -2)
+        statLbl.Position = UDim2.new(0, 4, 0.5, 0)
+        statLbl.BackgroundTransparency = 1
+        statLbl.Text = "OFF"
+        statLbl.TextColor3 = C.muted
+        statLbl.Font = Enum.Font.GothamBold
+        statLbl.TextSize = 11
+        statLbl.TextXAlignment = Enum.TextXAlignment.Center
+        local hitBtn = Instance.new("TextButton", cont)
+        hitBtn.Size = UDim2.new(1, 0, 1, 0)
+        hitBtn.BackgroundTransparency = 1
+        hitBtn.Text = ""
+        hitBtn.ZIndex = 10
+        local touchActive = false
+        local touchId = nil
+        local touchStart = nil
+        local frameStart = nil
+        local hasDragged = false
+        local tapCallback = nil
+        hitBtn.InputBegan:Connect(function(inp)
+            if inp.UserInputType ~= Enum.UserInputType.Touch then return end
+            touchActive = true
+            touchId = inp
+            touchStart = Vector2.new(inp.Position.X, inp.Position.Y)
+            frameStart = cont.Position
+            hasDragged = false
+        end)
+        UserInputService.InputChanged:Connect(function(inp)
+            if not touchActive or inp ~= touchId then return end
+            if inp.UserInputType ~= Enum.UserInputType.Touch then return end
+            local delta = Vector2.new(inp.Position.X, inp.Position.Y) - touchStart
+            if delta.Magnitude > DRAG_THRESHOLD then hasDragged = true end
+            if hasDragged then
+                local newX = frameStart.X.Offset + delta.X
+                local newY = frameStart.Y.Offset + delta.Y
+                cont.Position = UDim2.new(0, newX, 0, newY)
+                glow.Position = UDim2.new(0, newX - 4, 0, newY - 4)
+            end
+        end)
+        hitBtn.InputEnded:Connect(function(inp)
+            if inp ~= touchId then return end
+            if inp.UserInputType ~= Enum.UserInputType.Touch then return end
+            touchActive = false
+            if not hasDragged and tapCallback then tapCallback() end
+        end)
+        local function setOn(on)
+            local col = on and C.white or C.dim
+            TweenService:Create(stroke, TweenInfo.new(0.18), {Color = col}):Play()
+            TweenService:Create(glow, TweenInfo.new(0.18), {
+                BackgroundColor3 = col,
+                BackgroundTransparency = on and 0.72 or 0.92
+            }):Play()
+            TweenService:Create(cont, TweenInfo.new(0.18), {
+                BackgroundColor3 = on and Color3.fromRGB(22,22,22) or Color3.fromRGB(14,14,14)
+            }):Play()
+            statLbl.Text = on and "ON" or "OFF"
+            statLbl.TextColor3 = on and C.white or C.muted
+            topLbl.TextColor3 = on and C.white or C.muted
+        end
+        local function setTapCallback(cb) tapCallback = cb end
+        return setOn, setTapCallback
+    end
+    local vp = workspace.CurrentCamera.ViewportSize
+    local startX = math.floor(vp.X - 120)
+    local startY = math.floor(vp.Y * 0.30)
+    local spacing = 58
+    
+    -- AUTO LEFT button (keep this)
+    local alSetOn, alSetCb = makeDraggableMobBtn(mobSG, Vector2.new(startX, startY + spacing*0), "AUTO LEFT")
+    local alActive = false
+    alSetCb(function()
+        alActive = not alActive; alSetOn(alActive)
+        if alActive then
+            if AutoRightEnabled then AutoRightEnabled=false; Enabled.AutoRightEnabled=false; stopAutoRight()
+                if VisualSetters.AutoRightEnabled then VisualSetters.AutoRightEnabled(false,true) end end
+            AutoWalkEnabled=true; Enabled.AutoWalkEnabled=true
+            if VisualSetters.AutoWalkEnabled then VisualSetters.AutoWalkEnabled(true,true) end
+            startAutoWalk()
+        else
+            AutoWalkEnabled=false; Enabled.AutoWalkEnabled=false; stopAutoWalk()
+            if VisualSetters.AutoWalkEnabled then VisualSetters.AutoWalkEnabled(false,true) end
+        end
+        playSound("rbxassetid://6895079813", 0.3, alActive and 1.1 or 0.9)
+    end)
+    
+    -- AUTO RIGHT button (keep this)
+    local arSetOn, arSetCb = makeDraggableMobBtn(mobSG, Vector2.new(startX, startY + spacing*1), "AUTO RIGHT")
+    local arActive = false
+    arSetCb(function()
+        arActive = not arActive; arSetOn(arActive)
+        if arActive then
+            if AutoWalkEnabled then AutoWalkEnabled=false; Enabled.AutoWalkEnabled=false; stopAutoWalk()
+                if VisualSetters.AutoWalkEnabled then VisualSetters.AutoWalkEnabled(false,true) end end
+            AutoRightEnabled=true; Enabled.AutoRightEnabled=true
+            if VisualSetters.AutoRightEnabled then VisualSetters.AutoRightEnabled(true,true) end
+            startAutoRight()
+        else
+            AutoRightEnabled=false; Enabled.AutoRightEnabled=false; stopAutoRight()
+            if VisualSetters.AutoRightEnabled then VisualSetters.AutoRightEnabled(false,true) end
+        end
+        playSound("rbxassetid://6895079813", 0.3, arActive and 1.1 or 0.9)
+    end)
+    
+    -- AIMBOT button (keep this)
+    local abSetOn, abSetCb = makeDraggableMobBtn(mobSG, Vector2.new(startX, startY + spacing*2), "AIMBOT")
+    abVisualSetter = function(on) abSetOn(on) end
+    abSetCb(function() abToggle() playSound("rbxassetid://6895079813", 0.3, abActive and 1.1 or 0.9) end)
+    
+    -- FLOAT button (keep this)
+    local flSetOn, flSetCb = makeDraggableMobBtn(mobSG, Vector2.new(startX, startY + spacing*3), "FLOAT")
+    local flActive = false
+    flSetCb(function()
+        flActive = not flActive; flSetOn(flActive)
+        Enabled.Float = flActive
+        if VisualSetters.Float then VisualSetters.Float(flActive, true) end
+        if flActive then startFloat() else stopFloat() end
+        playSound("rbxassetid://6895079813", 0.3, flActive and 1.1 or 0.9)
+    end)
+    
+    -- REMOVED: Speed While Stealing button
+    -- REMOVED: Infinite Jump button
+    
+    -- Update visual setters
+    local _origFloatSetter = VisualSetters.Float
+    VisualSetters.Float = function(on, skipCB)
+        flActive = on; flSetOn(on)
+        if _origFloatSetter then _origFloatSetter(on, skipCB) end
+    end
+    
+    onAutoLeftDone = function()
+        alActive = false; alSetOn(false)
+        AutoWalkEnabled=false; Enabled.AutoWalkEnabled=false
+        if VisualSetters.AutoWalkEnabled then VisualSetters.AutoWalkEnabled(false,true) end
+    end
+    
+    onAutoRightDone = function()
+        arActive = false; arSetOn(false)
+        AutoRightEnabled=false; Enabled.AutoRightEnabled=false
+        if VisualSetters.AutoRightEnabled then VisualSetters.AutoRightEnabled(false,true) end
+    end
+    
+    abVisualSetter = function(on) abSetOn(on) end
+end
+
+-- ============================================================
 -- APPLY LOADED CONFIG
 -- ============================================================
 task.spawn(function()
@@ -1508,6 +1864,7 @@ task.spawn(function()
     if Enabled.FullAutoDuel then startFullAutoDuel() end
     if Enabled.Aimbot and not abActive then abToggle() end
     infinityJumpEnabled = Enabled.InfiniteJump
+    -- TP is enabled by default
 end)
 
 -- ============================================================
@@ -1610,4 +1967,6 @@ Player.CharacterAdded:Connect(function()
     pcall(function() local cam=workspace.CurrentCamera; if cam and Values.FOV then cam.FieldOfView=Values.FOV end end)
 end)
 
-print("FIVE HUB Loaded — Press U to toggle GUI. Infinite Jump integrated.")
+print("FIVE HUB Loaded — Press U to toggle GUI.")
+print("Auto Grab updated from .gg/sourceshub - Cooldown: " .. Values.StealCooldown .. "s, Hold: " .. Values.HoldDuration .. "s")
+print("TP LEFT and TP RIGHT added with toggle and speed control")
