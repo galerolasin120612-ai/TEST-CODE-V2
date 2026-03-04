@@ -60,6 +60,107 @@ local tpPositions = {
 }
 
 -- ============================================================
+-- NEW AUTO WALK SYSTEM (from coolhub)
+-- ============================================================
+local VELOCITY_SPEED = 58.37
+local SECOND_PHASE_SPEED = 29.4
+local JUMP_VELOCITY = 50
+
+local pathLeft = {
+    {pos = Vector3.new(-474.7, -5.9, 91.0)},
+    {pos = Vector3.new(-483.4, -3.9, 97.3)},
+    {pos = Vector3.new(-474.7, -5.9, 91.0)},
+    {pos = Vector3.new(-476.1, -5.5, 25.4)}
+}
+
+local pathRight = {
+    {pos = Vector3.new(-470.6, -5.9, 34.4)},
+    {pos = Vector3.new(-484.2, -3.9, 21.4)},
+    {pos = Vector3.new(-475.6, -5.8, 29.3)},
+    {pos = Vector3.new(-473.4, -5.9, 111)}
+}
+
+local autoWalkActive = false
+local currentPath = nil
+
+local function moveToPoint(hrp, target, speed)
+    local conn
+    conn = RunService.Heartbeat:Connect(function()
+        if not autoWalkActive or not currentPath then 
+            conn:Disconnect() 
+            if hrp then hrp.AssemblyLinearVelocity = Vector3.zero end
+            return 
+        end
+        local pos = hrp.Position
+        local dir = Vector3.new(target.X, pos.Y, target.Z) - pos
+        if dir.Magnitude <= 2 then 
+            conn:Disconnect() 
+            if hrp then hrp.AssemblyLinearVelocity = Vector3.zero end
+            return 
+        end
+        hrp.AssemblyLinearVelocity = Vector3.new(dir.Unit.X * speed, hrp.AssemblyLinearVelocity.Y, dir.Unit.Z * speed)
+    end)
+    
+    while autoWalkActive and currentPath and (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(target.X, 0, target.Z)).Magnitude > 2 do
+        RunService.Heartbeat:Wait()
+    end
+end
+
+local function runPath(path)
+    local char = Player.Character or Player.CharacterAdded:Wait()
+    local hrp = char:WaitForChild("HumanoidRootPart")
+    
+    for i, point in ipairs(path) do
+        if not autoWalkActive or not currentPath then return end
+        
+        local speed = (i > 2) and SECOND_PHASE_SPEED or VELOCITY_SPEED
+        moveToPoint(hrp, point.pos, speed)
+        
+        if i == 2 and autoWalkActive then
+            hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, JUMP_VELOCITY, hrp.AssemblyLinearVelocity.Z)
+            task.wait(0.35)
+        end
+        
+        if i == 1 or i == 3 or i == 4 then
+            task.wait(0.01)
+        end
+    end
+end
+
+local function startLeftPath()
+    currentPath = pathLeft
+    autoWalkActive = true
+    task.spawn(function()
+        while autoWalkActive and currentPath == pathLeft do
+            runPath(pathLeft)
+            task.wait(0.1)
+        end
+    end)
+end
+
+local function startRightPath()
+    currentPath = pathRight
+    autoWalkActive = true
+    task.spawn(function()
+        while autoWalkActive and currentPath == pathRight do
+            runPath(pathRight)
+            task.wait(0.1)
+        end
+    end)
+end
+
+local function stopAutoWalkPaths()
+    autoWalkActive = false
+    currentPath = nil
+    local char = Player.Character
+    if char and char:FindFirstChild("HumanoidRootPart") then
+        char.HumanoidRootPart.AssemblyLinearVelocity = Vector3.zero
+    end
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if hum then hum:Move(Vector3.zero, false) end
+end
+
+-- ============================================================
 -- STATE
 -- ============================================================
 local ConfigFileName = "FIVE_HUB_Config.json"
@@ -510,13 +611,58 @@ local function stopFloat()
 end
 
 -- ============================================================
+-- AUTO WALK FUNCTIONS (UPDATED with new source)
+-- ============================================================
+local function startAutoWalk()
+    if autoWalkActive then stopAutoWalkPaths() end
+    AutoWalkEnabled = true
+    Enabled.AutoWalkEnabled = true
+    startLeftPath()
+    
+    -- Update visual setter if exists
+    if VisualSetters and VisualSetters.AutoWalkEnabled then
+        VisualSetters.AutoWalkEnabled(true, true)
+    end
+end
+
+local function stopAutoWalk()
+    AutoWalkEnabled = false
+    Enabled.AutoWalkEnabled = false
+    stopAutoWalkPaths()
+    
+    if VisualSetters and VisualSetters.AutoWalkEnabled then
+        VisualSetters.AutoWalkEnabled(false, true)
+    end
+    if onAutoLeftDone then onAutoLeftDone() end
+end
+
+local function startAutoRight()
+    if autoWalkActive then stopAutoWalkPaths() end
+    AutoRightEnabled = true
+    Enabled.AutoRightEnabled = true
+    startRightPath()
+    
+    if VisualSetters and VisualSetters.AutoRightEnabled then
+        VisualSetters.AutoRightEnabled(true, true)
+    end
+end
+
+local function stopAutoRight()
+    AutoRightEnabled = false
+    Enabled.AutoRightEnabled = false
+    stopAutoWalkPaths()
+    
+    if VisualSetters and VisualSetters.AutoRightEnabled then
+        VisualSetters.AutoRightEnabled(false, true)
+    end
+    if onAutoRightDone then onAutoRightDone() end
+end
+
+-- ============================================================
 local POSITION_1 = Vector3.new(-476.48,-6.28, 92.73)
 local POSITION_2 = Vector3.new(-483.12,-4.95, 94.80)
 local POSITION_R1 = Vector3.new(-476.16,-6.52, 25.62)
 local POSITION_R2 = Vector3.new(-483.04,-5.09, 23.14)
-local autoWalkPhase = 1
-local autoRightPhase = 1
-local autoWalkConnection, autoRightConnection
 local coordESPFolder = Instance.new("Folder",workspace); coordESPFolder.Name="FIVE_CoordESP"
 local function createCoordMarker(pos,lbl,col)
     local dot = Instance.new("Part",coordESPFolder)
@@ -551,66 +697,6 @@ local function faceNorth()
     h.CFrame=CFrame.new(h.Position)*CFrame.Angles(0,math.rad(180),0)
     local cam=workspace.CurrentCamera
     if cam then cam.CFrame=CFrame.new(h.Position.X,h.Position.Y+2,h.Position.Z+12)*CFrame.Angles(0,math.rad(180),0) end
-end
-local function startAutoWalk()
-    if autoWalkConnection then autoWalkConnection:Disconnect() end
-    autoWalkPhase=1
-    autoWalkConnection = RunService.Heartbeat:Connect(function()
-        if not AutoWalkEnabled then return end
-        local c=Player.Character
-        if not c then return end
-        local h=c:FindFirstChild("HumanoidRootPart"); local hum=c:FindFirstChildOfClass("Humanoid")
-        if not h or not hum then return end
-        local target = autoWalkPhase==1 and POSITION_1 or POSITION_2
-        local dist = (Vector3.new(target.X,h.Position.Y,target.Z)-h.Position).Magnitude
-        if dist < 1 then
-            if autoWalkPhase==1 then autoWalkPhase=2; return end
-            hum:Move(Vector3.zero,false); h.AssemblyLinearVelocity=Vector3.new(0,0,0)
-            AutoWalkEnabled=false; Enabled.AutoWalkEnabled=false
-            if VisualSetters and VisualSetters.AutoWalkEnabled then VisualSetters.AutoWalkEnabled(false,true) end
-            if autoWalkConnection then autoWalkConnection:Disconnect(); autoWalkConnection=nil end
-            if onAutoLeftDone then onAutoLeftDone() end
-            faceSouth(); return
-        end
-        local dir=(target-h.Position); local md=Vector3.new(dir.X,0,dir.Z).Unit
-        hum:Move(md,false); h.AssemblyLinearVelocity=Vector3.new(md.X*Values.BoostSpeed,h.AssemblyLinearVelocity.Y,md.Z*Values.BoostSpeed)
-    end)
-end
-local function stopAutoWalk()
-    if autoWalkConnection then autoWalkConnection:Disconnect(); autoWalkConnection=nil end
-    autoWalkPhase=1
-    local c=Player.Character
-    if c then local hum=c:FindFirstChildOfClass("Humanoid") if hum then hum:Move(Vector3.zero,false) end end
-end
-local function startAutoRight()
-    if autoRightConnection then autoRightConnection:Disconnect() end
-    autoRightPhase=1
-    autoRightConnection = RunService.Heartbeat:Connect(function()
-        if not AutoRightEnabled then return end
-        local c=Player.Character
-        if not c then return end
-        local h=c:FindFirstChild("HumanoidRootPart"); local hum=c:FindFirstChildOfClass("Humanoid")
-        if not h or not hum then return end
-        local target = autoRightPhase==1 and POSITION_R1 or POSITION_R2
-        local dist = (Vector3.new(target.X,h.Position.Y,target.Z)-h.Position).Magnitude
-        if dist < 1 then
-            if autoRightPhase==1 then autoRightPhase=2; return end
-            hum:Move(Vector3.zero,false); h.AssemblyLinearVelocity=Vector3.new(0,0,0)
-            AutoRightEnabled=false; Enabled.AutoRightEnabled=false
-            if VisualSetters and VisualSetters.AutoRightEnabled then VisualSetters.AutoRightEnabled(false,true) end
-            if autoRightConnection then autoRightConnection:Disconnect(); autoRightConnection=nil end
-            if onAutoRightDone then onAutoRightDone() end
-            faceNorth(); return
-        end
-        local dir=(target-h.Position); local md=Vector3.new(dir.X,0,dir.Z).Unit
-        hum:Move(md,false); h.AssemblyLinearVelocity=Vector3.new(md.X*Values.BoostSpeed,h.AssemblyLinearVelocity.Y,md.Z*Values.BoostSpeed)
-    end)
-end
-local function stopAutoRight()
-    if autoRightConnection then autoRightConnection:Disconnect(); autoRightConnection=nil end
-    autoRightPhase=1
-    local c=Player.Character
-    if c then local hum=c:FindFirstChildOfClass("Humanoid") if hum then hum:Move(Vector3.zero,false) end end
 end
 
 -- ============================================================
@@ -1505,9 +1591,27 @@ createSlider(o,"Float Height",1,50,"FloatHeight",function(v) Values.FloatHeight=
 o+=1
 createSectionHeader(o,"AUTO WALK")
 o+=1
-createToggle(o,"Auto Walk Left","AutoWalkEnabled", function(s) AutoWalkEnabled=s; Enabled.AutoWalkEnabled=s; if s then startAutoWalk() else stopAutoWalk() end end, nil,"AUTOLEFT")
+createToggle(o,"Auto Walk Left","AutoWalkEnabled", function(s) 
+    if s then 
+        if AutoRightEnabled then 
+            stopAutoRight() 
+        end
+        startAutoWalk() 
+    else 
+        stopAutoWalk() 
+    end 
+end, nil,"AUTOLEFT")
 o+=1
-createToggle(o,"Auto Walk Right","AutoRightEnabled", function(s) AutoRightEnabled=s; Enabled.AutoRightEnabled=s; if s then startAutoRight() else stopAutoRight() end end, nil,"AUTORIGHT")
+createToggle(o,"Auto Walk Right","AutoRightEnabled", function(s) 
+    if s then 
+        if AutoWalkEnabled then 
+            stopAutoWalk() 
+        end
+        startAutoRight() 
+    else 
+        stopAutoRight() 
+    end 
+end, nil,"AUTORIGHT")
 o+=1
 createToggle(o,"Full Auto Play","FullAutoDuel", function(s) Enabled.FullAutoDuel=s if s then startFullAutoDuel() else stopFullAutoDuel() end end, nil,"FULLAUTODUEL")
 o+=1
@@ -1759,14 +1863,13 @@ if isMobile then
     alSetCb(function()
         alActive = not alActive; alSetOn(alActive)
         if alActive then
-            if AutoRightEnabled then AutoRightEnabled=false; Enabled.AutoRightEnabled=false; stopAutoRight()
-                if VisualSetters.AutoRightEnabled then VisualSetters.AutoRightEnabled(false,true) end end
-            AutoWalkEnabled=true; Enabled.AutoWalkEnabled=true
-            if VisualSetters.AutoWalkEnabled then VisualSetters.AutoWalkEnabled(true,true) end
+            if AutoRightEnabled then 
+                stopAutoRight()
+                if VisualSetters.AutoRightEnabled then VisualSetters.AutoRightEnabled(false,true) end 
+            end
             startAutoWalk()
         else
-            AutoWalkEnabled=false; Enabled.AutoWalkEnabled=false; stopAutoWalk()
-            if VisualSetters.AutoWalkEnabled then VisualSetters.AutoWalkEnabled(false,true) end
+            stopAutoWalk()
         end
         playSound("rbxassetid://6895079813", 0.3, alActive and 1.1 or 0.9)
     end)
@@ -1777,14 +1880,13 @@ if isMobile then
     arSetCb(function()
         arActive = not arActive; arSetOn(arActive)
         if arActive then
-            if AutoWalkEnabled then AutoWalkEnabled=false; Enabled.AutoWalkEnabled=false; stopAutoWalk()
-                if VisualSetters.AutoWalkEnabled then VisualSetters.AutoWalkEnabled(false,true) end end
-            AutoRightEnabled=true; Enabled.AutoRightEnabled=true
-            if VisualSetters.AutoRightEnabled then VisualSetters.AutoRightEnabled(true,true) end
+            if AutoWalkEnabled then 
+                stopAutoWalk()
+                if VisualSetters.AutoWalkEnabled then VisualSetters.AutoWalkEnabled(false,true) end 
+            end
             startAutoRight()
         else
-            AutoRightEnabled=false; Enabled.AutoRightEnabled=false; stopAutoRight()
-            if VisualSetters.AutoRightEnabled then VisualSetters.AutoRightEnabled(false,true) end
+            stopAutoRight()
         end
         playSound("rbxassetid://6895079813", 0.3, arActive and 1.1 or 0.9)
     end)
@@ -1804,9 +1906,6 @@ if isMobile then
         if flActive then startFloat() else stopFloat() end
         playSound("rbxassetid://6895079813", 0.3, flActive and 1.1 or 0.9)
     end)
-    
-    -- REMOVED: Speed While Stealing button
-    -- REMOVED: Infinite Jump button
     
     -- Update visual setters
     local _origFloatSetter = VisualSetters.Float
@@ -1859,8 +1958,14 @@ task.spawn(function()
     if Enabled.SpeedWhileStealing then startSpeedWhileStealing() end
     if Enabled.Unwalk then startUnwalk() end
     if Enabled.Float then startFloat() end
-    if Enabled.AutoWalkEnabled then AutoWalkEnabled=true; startAutoWalk() end
-    if Enabled.AutoRightEnabled then AutoRightEnabled=true; startAutoRight() end
+    if Enabled.AutoWalkEnabled then 
+        if Enabled.AutoRightEnabled then Enabled.AutoRightEnabled = false end
+        startAutoWalk() 
+    end
+    if Enabled.AutoRightEnabled then 
+        if Enabled.AutoWalkEnabled then Enabled.AutoWalkEnabled = false end
+        startAutoRight() 
+    end
     if Enabled.FullAutoDuel then startFullAutoDuel() end
     if Enabled.Aimbot and not abActive then abToggle() end
     infinityJumpEnabled = Enabled.InfiniteJump
@@ -1887,12 +1992,22 @@ local function dispatchKey(kc)
         if Enabled.Galaxy then startGalaxy() else stopGalaxy() end
     end
     if kc==KEYBINDS.AUTOLEFT and KEYBINDS.AUTOLEFT~=Enum.KeyCode.Unknown then
-        AutoWalkEnabled=not AutoWalkEnabled; Enabled.AutoWalkEnabled=AutoWalkEnabled
+        if AutoRightEnabled then 
+            stopAutoRight()
+            if VisualSetters.AutoRightEnabled then VisualSetters.AutoRightEnabled(false) end
+        end
+        AutoWalkEnabled = not AutoWalkEnabled
+        Enabled.AutoWalkEnabled = AutoWalkEnabled
         if VisualSetters.AutoWalkEnabled then VisualSetters.AutoWalkEnabled(AutoWalkEnabled) end
         if AutoWalkEnabled then startAutoWalk() else stopAutoWalk() end
     end
     if kc==KEYBINDS.AUTORIGHT and KEYBINDS.AUTORIGHT~=Enum.KeyCode.Unknown then
-        AutoRightEnabled=not AutoRightEnabled; Enabled.AutoRightEnabled=AutoRightEnabled
+        if AutoWalkEnabled then 
+            stopAutoWalk()
+            if VisualSetters.AutoWalkEnabled then VisualSetters.AutoWalkEnabled(false) end
+        end
+        AutoRightEnabled = not AutoRightEnabled
+        Enabled.AutoRightEnabled = AutoRightEnabled
         if VisualSetters.AutoRightEnabled then VisualSetters.AutoRightEnabled(AutoRightEnabled) end
         if AutoRightEnabled then startAutoRight() else stopAutoRight() end
     end
@@ -1963,6 +2078,14 @@ Player.CharacterAdded:Connect(function()
     if Enabled.Unwalk then startUnwalk() end
     if Enabled.AutoSteal then startAutoSteal() end
     if Enabled.Float then stopFloat(); task.wait(0.1); startFloat() end
+    if Enabled.AutoWalkEnabled then 
+        if Enabled.AutoRightEnabled then Enabled.AutoRightEnabled = false end
+        startAutoWalk() 
+    end
+    if Enabled.AutoRightEnabled then 
+        if Enabled.AutoWalkEnabled then Enabled.AutoWalkEnabled = false end
+        startAutoRight() 
+    end
     task.wait(0.5)
     pcall(function() local cam=workspace.CurrentCamera; if cam and Values.FOV then cam.FieldOfView=Values.FOV end end)
 end)
@@ -1970,3 +2093,4 @@ end)
 print("FIVE HUB Loaded — Press U to toggle GUI.")
 print("Auto Grab updated from .gg/sourceshub - Cooldown: " .. Values.StealCooldown .. "s, Hold: " .. Values.HoldDuration .. "s")
 print("TP LEFT and TP RIGHT added with toggle and speed control")
+print("Auto Walk Left/Right updated with new coolhub source!")
