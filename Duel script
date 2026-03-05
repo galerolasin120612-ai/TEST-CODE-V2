@@ -1760,55 +1760,77 @@ if isMobile then
     local mobSG = Instance.new("ScreenGui")
     mobSG.Name="FIVE_MOB"; mobSG.ResetOnSpawn=false; mobSG.DisplayOrder=999; mobSG.Parent=Player.PlayerGui
     local function makeDraggableMobBtn(parent, defaultPos, topLabel)
-        local BTN_W = 108
-        local BTN_H = 50
+        local BTN_W = 130
+        local BTN_H = 44
         local DRAG_THRESHOLD = 8
+        local GREEN_ON  = Color3.fromRGB(50, 220, 100)
+        local GREEN_DIM = Color3.fromRGB(30, 90, 50)
+        local BG_OFF    = Color3.fromRGB(18, 18, 18)
+        local BG_ON     = Color3.fromRGB(22, 36, 26)
+
         local glow = Instance.new("Frame", parent)
-        glow.Size = UDim2.new(0, BTN_W + 8, 0, BTN_H + 8)
-        glow.Position = UDim2.new(0, defaultPos.X - 4, 0, defaultPos.Y - 4)
-        glow.BackgroundColor3 = C.white
-        glow.BackgroundTransparency = 0.92
+        glow.Size = UDim2.new(0, BTN_W + 10, 0, BTN_H + 10)
+        glow.Position = UDim2.new(0, defaultPos.X - 5, 0, defaultPos.Y - 5)
+        glow.BackgroundColor3 = GREEN_DIM
+        glow.BackgroundTransparency = 0.85
         glow.BorderSizePixel = 0
-        rc(glow, 15)
+        rc(glow, 16)
+
         local cont = Instance.new("Frame", parent)
         cont.Size = UDim2.new(0, BTN_W, 0, BTN_H)
         cont.Position = UDim2.new(0, defaultPos.X, 0, defaultPos.Y)
-        cont.BackgroundColor3 = Color3.fromRGB(14, 14, 14)
+        cont.BackgroundColor3 = BG_OFF
         cont.BorderSizePixel = 0
         rc(cont, 12)
+
         local stroke = Instance.new("UIStroke", cont)
-        stroke.Thickness = 2; stroke.Color = C.dim
+        stroke.Thickness = 1.8
+        stroke.Color = GREEN_DIM
         stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+
+        local dot = Instance.new("Frame", cont)
+        dot.Size = UDim2.new(0, 8, 0, 8)
+        dot.Position = UDim2.new(0, 10, 0.5, -4)
+        dot.BackgroundColor3 = GREEN_DIM
+        dot.BorderSizePixel = 0
+        rc(dot, 4)
+
         local topLbl = Instance.new("TextLabel", cont)
-        topLbl.Size = UDim2.new(1, -8, 0.5, -1)
-        topLbl.Position = UDim2.new(0, 4, 0, 2)
+        topLbl.Size = UDim2.new(1, -52, 1, 0)
+        topLbl.Position = UDim2.new(0, 24, 0, 0)
         topLbl.BackgroundTransparency = 1
         topLbl.Text = topLabel
-        topLbl.TextColor3 = C.muted
-        topLbl.Font = Enum.Font.GothamBlack
-        topLbl.TextSize = 11
+        topLbl.TextColor3 = Color3.fromRGB(160, 160, 160)
+        topLbl.Font = Enum.Font.GothamSemibold
+        topLbl.TextSize = 12
         topLbl.TextScaled = false
-        topLbl.TextXAlignment = Enum.TextXAlignment.Center
-        local statLbl = Instance.new("TextLabel", cont)
-        statLbl.Size = UDim2.new(1, -8, 0.5, -2)
-        statLbl.Position = UDim2.new(0, 4, 0.5, 0)
-        statLbl.BackgroundTransparency = 1
-        statLbl.Text = "OFF"
-        statLbl.TextColor3 = C.muted
-        statLbl.Font = Enum.Font.GothamBold
-        statLbl.TextSize = 11
-        statLbl.TextXAlignment = Enum.TextXAlignment.Center
+        topLbl.TextXAlignment = Enum.TextXAlignment.Left
+        topLbl.TextYAlignment = Enum.TextYAlignment.Center
+
+        local gearLbl = Instance.new("TextLabel", cont)
+        gearLbl.Size = UDim2.new(0, 28, 1, 0)
+        gearLbl.Position = UDim2.new(1, -32, 0, 0)
+        gearLbl.BackgroundTransparency = 1
+        gearLbl.Text = "⚙"
+        gearLbl.TextColor3 = Color3.fromRGB(80, 80, 80)
+        gearLbl.Font = Enum.Font.GothamBold
+        gearLbl.TextSize = 14
+        gearLbl.TextXAlignment = Enum.TextXAlignment.Center
+        gearLbl.TextYAlignment = Enum.TextYAlignment.Center
+
         local hitBtn = Instance.new("TextButton", cont)
         hitBtn.Size = UDim2.new(1, 0, 1, 0)
         hitBtn.BackgroundTransparency = 1
         hitBtn.Text = ""
         hitBtn.ZIndex = 10
+
         local touchActive = false
         local touchId = nil
         local touchStart = nil
         local frameStart = nil
         local hasDragged = false
         local tapCallback = nil
+
         hitBtn.InputBegan:Connect(function(inp)
             if inp.UserInputType ~= Enum.UserInputType.Touch then return end
             touchActive = true
@@ -1826,7 +1848,7 @@ if isMobile then
                 local newX = frameStart.X.Offset + delta.X
                 local newY = frameStart.Y.Offset + delta.Y
                 cont.Position = UDim2.new(0, newX, 0, newY)
-                glow.Position = UDim2.new(0, newX - 4, 0, newY - 4)
+                glow.Position = UDim2.new(0, newX - 5, 0, newY - 5)
             end
         end)
         hitBtn.InputEnded:Connect(function(inp)
@@ -1835,19 +1857,19 @@ if isMobile then
             touchActive = false
             if not hasDragged and tapCallback then tapCallback() end
         end)
+
         local function setOn(on)
-            local col = on and C.white or C.dim
-            TweenService:Create(stroke, TweenInfo.new(0.18), {Color = col}):Play()
+            TweenService:Create(stroke, TweenInfo.new(0.18), {Color = on and GREEN_ON or GREEN_DIM}):Play()
+            TweenService:Create(dot, TweenInfo.new(0.18), {BackgroundColor3 = on and GREEN_ON or GREEN_DIM}):Play()
             TweenService:Create(glow, TweenInfo.new(0.18), {
-                BackgroundColor3 = col,
-                BackgroundTransparency = on and 0.72 or 0.92
+                BackgroundColor3 = on and GREEN_ON or GREEN_DIM,
+                BackgroundTransparency = on and 0.70 or 0.85
             }):Play()
             TweenService:Create(cont, TweenInfo.new(0.18), {
-                BackgroundColor3 = on and Color3.fromRGB(22,22,22) or Color3.fromRGB(14,14,14)
+                BackgroundColor3 = on and BG_ON or BG_OFF
             }):Play()
-            statLbl.Text = on and "ON" or "OFF"
-            statLbl.TextColor3 = on and C.white or C.muted
-            topLbl.TextColor3 = on and C.white or C.muted
+            topLbl.TextColor3 = on and Color3.fromRGB(230, 255, 235) or Color3.fromRGB(160, 160, 160)
+            gearLbl.TextColor3 = on and GREEN_ON or Color3.fromRGB(80, 80, 80)
         end
         local function setTapCallback(cb) tapCallback = cb end
         return setOn, setTapCallback
@@ -1857,7 +1879,6 @@ if isMobile then
     local startY = math.floor(vp.Y * 0.30)
     local spacing = 58
     
-    -- AUTO LEFT button (keep this)
     local alSetOn, alSetCb = makeDraggableMobBtn(mobSG, Vector2.new(startX, startY + spacing*0), "AUTO LEFT")
     local alActive = false
     alSetCb(function()
@@ -1874,7 +1895,6 @@ if isMobile then
         playSound("rbxassetid://6895079813", 0.3, alActive and 1.1 or 0.9)
     end)
     
-    -- AUTO RIGHT button (keep this)
     local arSetOn, arSetCb = makeDraggableMobBtn(mobSG, Vector2.new(startX, startY + spacing*1), "AUTO RIGHT")
     local arActive = false
     arSetCb(function()
@@ -1891,12 +1911,10 @@ if isMobile then
         playSound("rbxassetid://6895079813", 0.3, arActive and 1.1 or 0.9)
     end)
     
-    -- AIMBOT button (keep this)
     local abSetOn, abSetCb = makeDraggableMobBtn(mobSG, Vector2.new(startX, startY + spacing*2), "AIMBOT")
     abVisualSetter = function(on) abSetOn(on) end
     abSetCb(function() abToggle() playSound("rbxassetid://6895079813", 0.3, abActive and 1.1 or 0.9) end)
     
-    -- FLOAT button (keep this)
     local flSetOn, flSetCb = makeDraggableMobBtn(mobSG, Vector2.new(startX, startY + spacing*3), "FLOAT")
     local flActive = false
     flSetCb(function()
@@ -1907,7 +1925,6 @@ if isMobile then
         playSound("rbxassetid://6895079813", 0.3, flActive and 1.1 or 0.9)
     end)
     
-    -- Update visual setters
     local _origFloatSetter = VisualSetters.Float
     VisualSetters.Float = function(on, skipCB)
         flActive = on; flSetOn(on)
@@ -1969,7 +1986,6 @@ task.spawn(function()
     if Enabled.FullAutoDuel then startFullAutoDuel() end
     if Enabled.Aimbot and not abActive then abToggle() end
     infinityJumpEnabled = Enabled.InfiniteJump
-    -- TP is enabled by default
 end)
 
 -- ============================================================
