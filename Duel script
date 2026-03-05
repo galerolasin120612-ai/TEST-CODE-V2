@@ -1212,6 +1212,8 @@ local C = {
     dangerDark = Color3.fromRGB(120,22,22),
     badge = Color3.fromRGB(40,40,40),
     badgeActive= Color3.fromRGB(75,75,75),
+    green = Color3.fromRGB(50,220,100),
+    greenDim = Color3.fromRGB(30,90,50),
 }
 local WIN_W = math.floor(360*GS)
 local WIN_H = math.floor(420*GS)
@@ -1238,7 +1240,7 @@ main.Name="FIVE_Main"
 main.Size=UDim2.new(0, WIN_W, 0, WIN_H)
 main.Position=isMobile and UDim2.new(0.5,-WIN_W/2,0.5,-WIN_H/2) or UDim2.new(1,-(WIN_W+16),0,16)
 main.BackgroundColor3=C.bg; main.BorderSizePixel=0; main.Active=true; main.Draggable=not isMobile
-rc(main, CR); st(main, 3, C.white, 0)
+rc(main, CR); st(main, 3, C.green, 0)
 if isMobile then
     local mobDragging = false
     local mobDragStart, mobFrameStart
@@ -1510,7 +1512,7 @@ local PB_H = math.floor(52*GS)
 local progBar = Instance.new("Frame", sg)
 progBar.Size=UDim2.new(0,PB_W,0,PB_H); progBar.Position=UDim2.new(0.5,-PB_W/2,0.8,-PB_H/2)
 progBar.BackgroundColor3=Color3.fromRGB(14,14,14); progBar.BorderSizePixel=0
-rc(progBar, CR); st(progBar, 3, C.white, 0)
+rc(progBar, CR); st(progBar, 3, C.green, 0)
 ProgressPercentLabel = Instance.new("TextLabel", progBar)
 ProgressPercentLabel.Size=UDim2.new(1,0,0,math.floor(28*GS))
 ProgressPercentLabel.Position=UDim2.new(0,0,0,math.floor(3*GS))
@@ -1556,7 +1558,7 @@ pbTrack.Position=UDim2.new(0,math.floor(8*GS),1,-math.floor(10*GS))
 pbTrack.BackgroundColor3=C.off; pbTrack.BorderSizePixel=0; pbTrack.ZIndex=2
 rc(pbTrack, 4); st(pbTrack, 1.5, C.border, 0.4)
 ProgressBarFill = Instance.new("Frame", pbTrack)
-ProgressBarFill.Size=UDim2.new(0,0,1,0); ProgressBarFill.BackgroundColor3=C.white
+ProgressBarFill.Size=UDim2.new(0,0,1,0); ProgressBarFill.BackgroundColor3=C.green
 ProgressBarFill.BorderSizePixel=0; ProgressBarFill.ZIndex=3; rc(ProgressBarFill, 4)
 
 -- ============================================================
@@ -1749,7 +1751,7 @@ miniBtn.Position=UDim2.new(1,-(math.floor(38*GS)+12),0,12)
 miniBtn.BackgroundColor3=C.bg; miniBtn.Text="5"; miniBtn.TextColor3=C.white
 miniBtn.Font=Enum.Font.GothamBlack; miniBtn.TextSize=math.floor(18*GS)
 miniBtn.BorderSizePixel=0; miniBtn.Visible=false
-rc(miniBtn, math.floor(10*GS)); st(miniBtn, 3, C.white, 0)
+rc(miniBtn, math.floor(10*GS)); st(miniBtn, 3, C.green, 0)
 onTap(miniBtn, function() main.Visible=true; miniBtn.Visible=false; playSound("rbxassetid://6895079813",0.4,1) end)
 onTap(closeBtn, function() main.Visible=false; miniBtn.Visible=true; playSound("rbxassetid://6895079813",0.4,1) end)
 
