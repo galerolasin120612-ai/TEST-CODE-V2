@@ -161,6 +161,120 @@ local function stopAutoWalkPaths()
 end
 
 -- ============================================================
+-- FIXED AUTO GRAB (from .gg/sourceshub)
+-- ============================================================
+local ProgressBarFill, ProgressPercentLabel
+local isStealing = false
+local stealStartTime = nil
+local progressConnection = nil
+
+-- Hanapin ang pinakamalapit na Steal prompt
+local function getPromptPart(prompt)
+    local parent = prompt.Parent
+    if parent:IsA("BasePart") then return parent end
+    if parent:IsA("Model") then return parent.PrimaryPart or parent:FindFirstChildWhichIsA("BasePart") end
+    if parent:IsA("Attachment") then return parent.Parent end
+    return parent:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function findNearestStealPrompt()
+    local HRP = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+    if not HRP then return nil end
+    
+    local nearestPrompt = nil
+    local minDist = math.huge
+    local plots = workspace:FindFirstChild("Plots")
+    if not plots then return nil end
+    
+    for _, desc in pairs(plots:GetDescendants()) do
+        if desc:IsA("ProximityPrompt") and desc.Enabled and desc.ActionText == "Steal" then
+            local part = getPromptPart(desc)
+            if part then
+                local dist = (HRP.Position - part.Position).Magnitude
+                if dist < minDist then
+                    minDist = dist
+                    nearestPrompt = desc
+                end
+            end
+        end
+    end
+    return nearestPrompt
+end
+
+local function triggerPrompt(prompt)
+    if not prompt or not prompt:IsDescendantOf(workspace) then return end
+    
+    -- Set prompt properties for maximum range
+    prompt.MaxActivationDistance = 9e9
+    prompt.RequiresLineOfSight = false
+    prompt.ClickablePrompt = true
+    
+    -- Try using fireproximityprompt first (executor function)
+    local usedFire = pcall(function()
+        fireproximityprompt(prompt, 9e9, Values.HoldDuration)
+    end)
+    
+    -- Fallback method if fireproximityprompt is not available
+    if not usedFire then
+        pcall(function()
+            prompt:InputHoldBegin()
+            task.wait(Values.HoldDuration)
+            prompt:InputHoldEnd()
+        end)
+    end
+    
+    -- Visual feedback (progress bar)
+    if not isStealing then
+        isStealing = true
+        stealStartTime = tick()
+        
+        if progressConnection then progressConnection:Disconnect() end
+        progressConnection = RunService.Heartbeat:Connect(function()
+            if not isStealing then 
+                progressConnection:Disconnect() 
+                return 
+            end
+            local prog = math.clamp((tick() - stealStartTime) / Values.HoldDuration, 0, 1)
+            if ProgressBarFill then 
+                ProgressBarFill.Size = UDim2.new(prog, 0, 1, 0) 
+            end
+            if ProgressPercentLabel then 
+                ProgressPercentLabel.Text = math.floor(prog * 100) .. "%" 
+            end
+        end)
+        
+        task.wait(Values.HoldDuration + 0.1)
+        isStealing = false
+        if progressConnection then progressConnection:Disconnect() end
+        if ProgressBarFill then ProgressBarFill.Size = UDim2.new(0, 0, 1, 0) end
+        if ProgressPercentLabel then ProgressPercentLabel.Text = "0%" end
+    end
+end
+
+local function startAutoSteal()
+    if Connections.autoSteal then return end
+    
+    Connections.autoSteal = RunService.Heartbeat:Connect(function()
+        if not Enabled.AutoSteal or isStealing then return end
+        
+        local prompt = findNearestStealPrompt()
+        if prompt then
+            triggerPrompt(prompt)
+        end
+    end)
+end
+
+local function stopAutoSteal()
+    if Connections.autoSteal then 
+        Connections.autoSteal:Disconnect() 
+        Connections.autoSteal = nil 
+    end
+    isStealing = false
+    if ProgressBarFill then ProgressBarFill.Size = UDim2.new(0, 0, 1, 0) end
+    if ProgressPercentLabel then ProgressPercentLabel.Text = "0%" end
+end
+
+-- ============================================================
 -- STATE
 -- ============================================================
 local ConfigFileName = "FIVE_HUB_Config.json"
@@ -169,7 +283,7 @@ local Enabled = {
     AntiRagdoll = false,
     SpinBot = false,
     SpeedWhileStealing = false,
-    AutoSteal = false,
+    AutoSteal = false,  -- eto yung auto grab
     Unwalk = false,
     Optimizer = false,
     Galaxy = false,
@@ -183,7 +297,7 @@ local Enabled = {
     Aimbot = false,
     Float = false,
     FullAutoDuel = false,
-    TpEnabled = true,  -- TP toggle
+    TpEnabled = true,
 }
 local Values = {
     BoostSpeed = 30,
@@ -199,7 +313,7 @@ local Values = {
     FloatHeight = 8,
     JumpForce = 50,
     ClampFallSpeed = 80,
-    TpSpeed = 0.1,  -- TP speed
+    TpSpeed = 0.1,
     StealCooldown = 0.2,  -- NEW: from sourceshub
     HoldDuration = 0.5,   -- NEW: from sourceshub
 }
@@ -839,129 +953,6 @@ end
 local function stopSpeedWhileStealing()
     if Connections.speedWhileStealing then Connections.speedWhileStealing:Disconnect(); Connections.speedWhileStealing=nil end
 end
-
--- ============================================================
--- AUTO GRAB (UPDATED - from .gg/sourceshub)
--- ============================================================
-local ProgressBarFill, ProgressPercentLabel
-local isStealing = false
-local stealStartTime = nil
-local progressConnection = nil
-
-local function getPromptPart(prompt)
-    local parent = prompt.Parent
-    if parent:IsA("BasePart") then return parent end
-    if parent:IsA("Model") then return parent.PrimaryPart or parent:FindFirstChildWhichIsA("BasePart") end
-    if parent:IsA("Attachment") then return parent.Parent end
-    return parent:FindFirstChildWhichIsA("BasePart", true)
-end
-
-local function findNearestStealPrompt()
-    local HRP = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
-    if not HRP then return nil end
-    
-    local nearestPrompt = nil
-    local minDist = math.huge
-    local plots = workspace:FindFirstChild("Plots")
-    if not plots then return nil end
-    
-    for _, desc in pairs(plots:GetDescendants()) do
-        if desc:IsA("ProximityPrompt") and desc.Enabled and desc.ActionText == "Steal" then
-            local part = getPromptPart(desc)
-            if part then
-                local dist = (HRP.Position - part.Position).Magnitude
-                if dist < minDist then
-                    minDist = dist
-                    nearestPrompt = desc
-                end
-            end
-        end
-    end
-    return nearestPrompt
-end
-
-local function triggerPrompt(prompt)
-    if not prompt or not prompt:IsDescendantOf(workspace) then return end
-    
-    -- Set prompt properties for maximum range
-    prompt.MaxActivationDistance = 9e9
-    prompt.RequiresLineOfSight = false
-    prompt.ClickablePrompt = true
-    
-    -- Try using fireproximityprompt first (executor function)
-    local usedFire = pcall(function()
-        fireproximityprompt(prompt, 9e9, Values.HoldDuration)
-    end)
-    
-    -- Fallback method if fireproximityprompt is not available
-    if not usedFire then
-        pcall(function()
-            prompt:InputHoldBegin()
-            task.wait(Values.HoldDuration)
-            prompt:InputHoldEnd()
-        end)
-    end
-    
-    -- Visual feedback (progress bar)
-    if not isStealing then
-        isStealing = true
-        stealStartTime = tick()
-        
-        if progressConnection then progressConnection:Disconnect() end
-        progressConnection = RunService.Heartbeat:Connect(function()
-            if not isStealing then 
-                progressConnection:Disconnect() 
-                return 
-            end
-            local prog = math.clamp((tick() - stealStartTime) / Values.HoldDuration, 0, 1)
-            if ProgressBarFill then 
-                ProgressBarFill.Size = UDim2.new(prog, 0, 1, 0) 
-            end
-            if ProgressPercentLabel then 
-                ProgressPercentLabel.Text = math.floor(prog * 100) .. "%" 
-            end
-        end)
-        
-        task.wait(Values.HoldDuration + 0.1)
-        isStealing = false
-        if progressConnection then progressConnection:Disconnect() end
-        if ProgressBarFill then ProgressBarFill.Size = UDim2.new(0, 0, 1, 0) end
-        if ProgressPercentLabel then ProgressPercentLabel.Text = "0%" end
-    end
-end
-
-local function startAutoSteal()
-    if Connections.autoSteal then return end
-    
-    Connections.autoSteal = RunService.Heartbeat:Connect(function()
-        if not Enabled.AutoSteal or isStealing then return end
-        
-        local prompt = findNearestStealPrompt()
-        if prompt then
-            triggerPrompt(prompt)
-        end
-    end)
-end
-
-local function stopAutoSteal()
-    if Connections.autoSteal then 
-        Connections.autoSteal:Disconnect() 
-        Connections.autoSteal = nil 
-    end
-    isStealing = false
-    if ProgressBarFill then ProgressBarFill.Size = UDim2.new(0, 0, 1, 0) end
-    if ProgressPercentLabel then ProgressPercentLabel.Text = "0%" end
-end
-
--- Character respawn handling
-Player.CharacterAdded:Connect(function()
-    task.wait(1)
-    if Enabled.AutoSteal then
-        stopAutoSteal()
-        task.wait(0.1)
-        startAutoSteal()
-    end
-end)
 
 -- ============================================================
 -- OTHER BACKEND (existing)
@@ -1649,13 +1640,13 @@ if not isMobile then
     abVisualSetter = function(on) if VisualSetters.Aimbot then VisualSetters.Aimbot(on,true) end end
 end
 
--- TELEPORT SECTION (NEW)
+-- TELEPORT SECTION
 createSectionHeader(o,"TELEPORT")
 o+=1
 createToggle(o,"Enable TP","TpEnabled", function(s) Enabled.TpEnabled=s end, nil, nil)
 o+=1
 
--- TP LEFT Button (as a toggle-style row but actually a button)
+-- TP LEFT Button
 local tpLeftRow = Instance.new("Frame", scroll)
 tpLeftRow.Size=UDim2.new(1,0,0,ROW_H); tpLeftRow.BackgroundColor3=C.bgRow
 tpLeftRow.BorderSizePixel=0; tpLeftRow.LayoutOrder=o
@@ -1754,7 +1745,7 @@ onTap(miniBtn, function() main.Visible=true; miniBtn.Visible=false; playSound("r
 onTap(closeBtn, function() main.Visible=false; miniBtn.Visible=true; playSound("rbxassetid://6895079813",0.4,1) end)
 
 -- ============================================================
--- MOBILE FLOATING BUTTONS (EDITED - inalis ang speed boost at inf jump)
+-- MOBILE FLOATING BUTTONS
 -- ============================================================
 if isMobile then
     local mobSG = Instance.new("ScreenGui")
@@ -2107,6 +2098,5 @@ Player.CharacterAdded:Connect(function()
 end)
 
 print("FIVE HUB Loaded — Press U to toggle GUI.")
-print("Auto Grab updated from .gg/sourceshub - Cooldown: " .. Values.StealCooldown .. "s, Hold: " .. Values.HoldDuration .. "s")
-print("TP LEFT and TP RIGHT added with toggle and speed control")
-print("Auto Walk Left/Right updated with new coolhub source!")
+print("✅ AUTO GRAB FIXED NA! (from .gg/sourceshub)")
+print("✅ Hold Duration: " .. Values.HoldDuration .. "s, Cooldown: " .. Values.StealCooldown .. "s")
